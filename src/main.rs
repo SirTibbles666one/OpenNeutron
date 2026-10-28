@@ -460,6 +460,8 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Get,       "/api/user/pq-keys",    Authenticated, endpoints::pqkeys::get);
     router.add_route(Method::Post,      "/api/user/pq-keys",    Authenticated, endpoints::pqkeys::set);
     router.add_route(Method::Delete,    "/api/user/pq-keys",    Authenticated, endpoints::pqkeys::remove);
+    // Work list for re-sealing mail stored before post-quantum protection.
+    router.add_route(Method::Get,       "/api/pq/migration",      Authenticated, endpoints::pqkeys::migration);
     router.add_route(Method::Post,      "/api/note/status",         Authenticated, endpoints::notes::status);
     router.add_route(Method::Post,      "/api/note/revoke",         Authenticated, endpoints::notes::revoke);
     router.add_route(Method::Get,       "/api/admin/recipients",    Admin, endpoints::admin::recipients);
