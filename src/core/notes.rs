@@ -56,6 +56,19 @@ fn default_mode() -> String {
     "pgp".to_string()
 }
 
+/// One attachment, already encrypted by the sender's browser to the same secret
+/// as the body. Stored as armour: base64 of binary ciphertext needs escaping, and
+/// armour is plain ASCII that survives JSON, logs and diffs without surprises.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NoteFile {
+    /// What the recipient sees. Only ever a name, never a path.
+    pub name: String,
+    pub armored: String,
+    /// Plaintext size, so the recipient knows what they are about to download.
+    #[serde(default)]
+    pub size: u64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Note {
     pub token: String,
@@ -77,6 +90,9 @@ pub struct Note {
     /// PGP armour. Cleared on open, on expiry, and never readable here.
     #[serde(default)]
     pub armored: String,
+    /// Attachments, encrypted to the same secret as the body and cleared with it.
+    #[serde(default)]
+    pub files: Vec<NoteFile>,
     pub created_at: u64,
     pub expires_at: Option<u64>,
     pub opened_at: Option<u64>,
@@ -238,6 +254,7 @@ pub fn open(token: &str) -> io::Result<Open> {
     if note.is_expired(now) {
         note.expired_at = Some(now);
         note.armored.clear();
+        note.files.clear();
         write_at(&path, &store)?;
         return Ok(Open::Expired);
     }
@@ -251,6 +268,7 @@ pub fn open(token: &str) -> io::Result<Open> {
         note.fetches = note.fetches.saturating_add(1);
         if note.fetches > MAX_PASSPHRASE_FETCHES {
             note.armored.clear();
+            note.files.clear();
             note.opened_at = Some(now);
         }
         write_at(&path, &store)?;
@@ -258,6 +276,7 @@ pub fn open(token: &str) -> io::Result<Open> {
     }
 
     note.armored.clear();
+    note.files.clear();
     note.opened_at = Some(now);
     write_at(&path, &store)?;
     Ok(Open::Served(served))
@@ -279,6 +298,10 @@ pub fn burn(token: &str) -> io::Result<bool> {
         return Ok(false);
     }
     note.armored.clear();
+    for file in note.files.iter_mut() {
+        file.armored.clear();
+    }
+    note.files.clear();
     note.opened_at = Some(now());
     write_at(&path, &store)?;
     Ok(true)
@@ -298,6 +321,7 @@ pub fn revoke(token: &str, owner_uid: u128) -> io::Result<bool> {
         return Ok(false);
     }
     note.armored.clear();
+    note.files.clear();
     note.revoked_at = Some(now());
     write_at(&path, &store)?;
     Ok(true)
@@ -329,6 +353,7 @@ pub fn sweep() {
     for note in store.notes.values_mut() {
         if note.is_sealed() && note.is_expired(now) {
             note.armored.clear();
+            note.files.clear();
             note.expired_at = Some(now);
             changed = true;
         }

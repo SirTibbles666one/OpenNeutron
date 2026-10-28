@@ -38,6 +38,39 @@ struct CreateRequest {
     /// Seconds until the timer clears it, regardless of opens.
     #[serde(default)]
     expires_in_seconds: Option<u64>,
+    /// Attachments, each already encrypted to the same secret as the body. Only
+    /// for passphrase notes: the page that can read the body can decrypt them in
+    /// the same place, with the same phrase.
+    #[serde(default)]
+    files: Vec<FileInput>,
+}
+
+#[derive(Deserialize)]
+struct FileInput {
+    name: String,
+    armored: String,
+    #[serde(default)]
+    size: u64,
+}
+
+/// Caps that keep one note from becoming a file host: five attachments, and the
+/// armour of all of them together under six megabytes.
+const MAX_FILES: usize = 5;
+const MAX_FILES_ARMOR: usize = 6_000_000;
+
+/// A display name, never a path: separators and control characters removed, and
+/// short enough to render in a list.
+fn safe_name(raw: &str) -> String {
+    // Only the last segment survives: "../evil/x" and "C:\\tmp\\x" both reduce to
+    // "x", so nothing here can name a path the recipient's browser would follow.
+    let last = raw.rsplit(|c| c == '/' || c == '\\').next().unwrap_or(raw);
+    let cleaned: String = last
+        .chars()
+        .filter(|c| !c.is_control() && *c != '/' && *c != '\\' && *c != ':')
+        .collect();
+    let trimmed = cleaned.trim().trim_start_matches('.').trim();
+    let name = if trimmed.is_empty() { "attachment" } else { trimmed };
+    name.chars().take(80).collect()
 }
 
 #[derive(Serialize)]
@@ -243,6 +276,24 @@ pub fn create(
         None => None,
     };
 
+    // Attachments only travel with a passphrase note: in key mode the page hands
+    // the recipient armour for their own client, and asking them to decrypt five
+    // more files by hand would be worse than refusing.
+    if !req.files.is_empty() && mode != "passphrase" {
+        return json_error(
+            400,
+            "files_need_passphrase",
+            "Attachments need the passphrase lock — switch the seal to a passphrase to send files",
+        );
+    }
+    if req.files.len() > MAX_FILES {
+        return json_error(400, "too_many_files", &format!("At most {} attachments per note", MAX_FILES));
+    }
+    let total_armor: usize = req.files.iter().map(|f| f.armored.len()).sum();
+    if total_armor > MAX_FILES_ARMOR {
+        return json_error(413, "files_too_large", "Those attachments are too large for one note");
+    }
+
     if notes::active_count(user.uid) >= notes::MAX_ACTIVE_PER_SENDER {
         return json_error(429, "too_many_notes", "Too many unopened notes; open or cancel some first");
     }
@@ -257,6 +308,15 @@ pub fn create(
         mode: mode.clone(),
         fetches: 0,
         armored: armored.to_string(),
+        files: req
+            .files
+            .iter()
+            .map(|f| notes::NoteFile {
+                name: safe_name(&f.name),
+                armored: f.armored.clone(),
+                size: f.size,
+            })
+            .collect(),
         created_at: now,
         expires_at,
         opened_at: None,
@@ -338,6 +398,11 @@ pub fn open(
                 "subject": note.subject,
                 "recipient": note.recipient,
                 "created_at": note.created_at,
+                "files": note
+                    .files
+                    .iter()
+                    .map(|f| json!({ "name": f.name, "armored": f.armored, "size": f.size }))
+                    .collect::<Vec<_>>(),
                 "deleted": true,
             }))
             .unwrap_or_default();
@@ -615,6 +680,48 @@ btn.addEventListener('click', async () => {
     document.getElementById('text').textContent = text;
     document.getElementById('out').hidden = false;
     document.getElementById('form').hidden = true;
+
+    // Attachments came in the same response, encrypted to the same phrase. The
+    // bytes are already here, so nothing is fetched after this: the note is
+    // burned below and the page still holds everything it needs.
+    const files = d.files || [];
+    if (files.length) {
+      const box = document.getElementById('files');
+      const heading = document.createElement('p');
+      heading.className = 'label';
+      heading.textContent = files.length === 1 ? 'Attachment' : 'Attachments';
+      box.appendChild(heading);
+      for (const f of files) {
+        const btn = document.createElement('button');
+        const kb = f.size ? ' (' + Math.max(1, Math.round(f.size / 1024)) + ' KB)' : '';
+        btn.textContent = 'Download ' + f.name + kb;
+        btn.className = 'ghost file';
+        btn.addEventListener('click', async () => {
+          const label = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = 'Opening…';
+          try {
+            const m = await openpgp.readMessage({ armoredMessage: f.armored });
+            const out = await openpgp.decrypt({ message: m, passwords: [pass], format: 'binary' });
+            const blob = new Blob([out.data], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = f.name;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+            btn.textContent = 'Saved';
+          } catch (e) {
+            btn.disabled = false;
+            btn.textContent = label;
+            document.getElementById('msg').textContent = 'That file could not be opened: ' + e.message;
+          }
+        });
+        box.appendChild(btn);
+      }
+    }
     fetch('/api/note/burn', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -651,6 +758,7 @@ fn render_sealed(subject: &str, from: &str, to: &str, expiry: &str, token: &str,
     let out = if mode == "passphrase" {
         r#"<div id="out" hidden>
              <pre id="text"></pre>
+             <div id="files"></div>
              <p class="warn">Read it now — it has been deleted from the server.</p>
            </div>
            <p class="warn" id="msg"></p>"#

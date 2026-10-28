@@ -1208,3 +1208,19 @@ returned. Finished rows are pruned after a day.
 ```
 `200 {"cancelled": true}`. `409 not_cancellable` once it has gone out, once it is
 already cancelled, or when it is not the caller's — one answer for all three.
+
+#### Sealed-note attachments
+
+`POST /note/create` accepts `files: [{ "name": "...", "armored": "...", "size": 4000 }]`
+— each entry is a PGP message the client sealed to the **same passphrase** as the
+body. Five files and 6,000,000 characters of armour per note.
+
+- `400 files_need_passphrase` when `mode` is `pgp`: a key-locked note is decrypted
+  by the recipient's own client, so its page cannot open files for them.
+- `400 too_many_files`, `413 files_too_large` on the caps.
+- Names are reduced to the last path segment, stripped of `/`, `\\`, `:` and
+  control characters, trimmed of leading dots and cut to 80 characters.
+
+`POST /note/open` returns the same `files` array alongside the body, and the page
+decrypts them locally. Files are cleared with the body: on open (key mode), on
+`/note/burn` (passphrase mode), on withdrawal and on expiry.
