@@ -474,7 +474,6 @@ pub fn send_email(
     // The envelope sender is the authenticated account, never a client-supplied
     // value: honouring 'req.from' would let any user send mail as anyone,
     // including as another local user or as a third-party domain.
-    let domain = emailutils::get_server_domain();
     // Outbound quota: there is no relay to throttle, so the limit lives here.
     if let Err(retry_after) = crate::utils::quota::check_and_record(&user.username) {
         let err = serde_json::to_vec(&ErrorResponse {
@@ -955,7 +954,6 @@ pub fn send_encrypted(
 
     // Group recipients by domain for efficient delivery
     let mut by_domain: std::collections::HashMap<String, Vec<(String, Vec<u8>, bool)>> = std::collections::HashMap::new();
-    let mut local_delivered = 0usize;
     for (address, payload) in &req.recipients {
         // A recipient whose mailbox lives on this server must not leave it.
         // Sending their copy out over SMTP and re-parsing it on the way back is
@@ -1055,7 +1053,6 @@ pub fn send_encrypted(
                             &format!("From {}@{}", user.username, emailutils::get_server_domain()),
                         );
 
-                        local_delivered += 1;
                         delivery_results.push(DeliveryResult {
                             address: address.clone(),
                             success: true,

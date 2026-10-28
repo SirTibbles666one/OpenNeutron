@@ -137,7 +137,7 @@ pub fn encrypt_hybrid(
     username: &str,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
-    use ml_kem::kem::{Encapsulate, Kem};
+    use ml_kem::kem::Encapsulate;
     use ml_kem::{EncapsulationKey, MlKem768};
     use rand::RngCore;
     use rsa::pkcs8::DecodePublicKey;
