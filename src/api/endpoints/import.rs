@@ -73,6 +73,15 @@ fn split_headers(raw: &[u8]) -> (String, usize) {
     (String::from_utf8_lossy(raw).to_string(), raw.len())
 }
 
+
+/// Lowercase hex SHA-256, for identifying a message that has no Message-ID.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect()
+}
+
 fn header_value(headers: &str, name: &str) -> Option<String> {
     // Folded headers continue on the next line with leading whitespace; a
     // Message-ID or a long From can be folded, so join the continuations.
@@ -200,11 +209,18 @@ pub fn message(
 
     let (header_block, body_start) = split_headers(&raw);
     let message_id = header_value(&header_block, "message-id");
-    if let Some(id) = &message_id {
+    // Identity for dedupe: the Message-ID when there is one, otherwise the bytes
+    // themselves. Plenty of mail — and every message a test writes by hand — has
+    // no Message-ID, and without a fallback restoring the same archive twice
+    // duplicates the whole mailbox.
+    let identity = message_id
+        .clone()
+        .unwrap_or_else(|| format!("sha256:{}", sha256_hex(&raw)));
+    if !identity.is_empty() {
         // Skipped only if that copy is still in the mailbox. A deleted message
         // is not "already here", and a re-import is how someone gets it back.
         let still_here = load_seen().into_iter().any(|(seen_id, seen_uid)| {
-            &seen_id == id
+            seen_id == identity
                 && seen_uid
                     .parse::<u128>()
                     .map(|uid| user.emailIds.contains(&uid))
@@ -213,7 +229,7 @@ pub fn message(
         if still_here {
             return out(
                 200,
-                serde_json::to_vec(&json!({ "skipped": true, "message_id": id }))
+                serde_json::to_vec(&json!({ "skipped": true, "message_id": identity }))
                     .unwrap_or_default(),
             );
         }
@@ -275,9 +291,7 @@ pub fn message(
     if let Err(e) = user_storage.save_to_file() {
         log::warn!("[Import] Failed to persist the index after importing for '{}': {}", user.username, e);
     }
-    if let Some(id) = &message_id {
-        remember_seen(id, uid);
-    }
+    remember_seen(&identity, uid);
 
     log::info!("[Import] '{}' imported message uid={} from <{}>", user.username, uid, sender_for_groups);
     out(
