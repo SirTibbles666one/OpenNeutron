@@ -74,6 +74,11 @@ fn erase_account(user_storage: &UserStorage, email_storage: &EmailStorage, usern
         Ok(_) => {}
         Err(e) => log::warn!("[Admin] Could not remove aliases for '{}': {}", username, e),
     }
+    // A post-quantum key left behind is worse than clutter: if the name is ever
+    // reused, new mail would be sealed to a decapsulation key nobody holds.
+    if let Err(e) = crate::core::pqkeys::remove(username) {
+        log::warn!("[Admin] Could not remove post-quantum keys for '{}': {}", username, e);
+    }
     // A deleted account must not linger in the approval queue: approving a ghost
     // would 404, and the panel would keep offering a button that cannot work.
     if let Err(e) = crate::core::pending_users::remove(username) {
