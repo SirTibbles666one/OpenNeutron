@@ -38,6 +38,7 @@ fn plain_response(email: &Email) -> EmailBytesResponse {
         expires_at: None,
         deleted: false,
         from: Some(email.from.clone()),
+        alias: crate::core::arrival::get(email.uid),
     }
 }
 
@@ -366,6 +367,54 @@ fn schedule_error(e: crate::core::scheduled::QueueError) -> Response<Cursor<Vec<
     Response::from_data(err).with_status_code(status).with_header(json_header())
 }
 
+/// Who this message goes out as.
+///
+/// The account address is the default. A caller may also send as one of their own
+/// switched-on aliases — which is what makes an alias a two-way address rather
+/// than a mailbox you can only read. Anything else (someone else's alias, a
+/// switched-off one, an address on another domain) is refused rather than
+/// quietly replaced: a message that goes out under the wrong name is worse than
+/// one that does not go out.
+fn sender_address_for(
+    user: &User,
+    wanted: Option<&str>,
+) -> Result<String, Response<Cursor<Vec<u8>>>> {
+    let domain = emailutils::get_server_domain();
+    let real = format!("{}@{}", user.username, domain);
+
+    let requested = wanted.map(|w| w.trim().to_ascii_lowercase()).filter(|w| !w.is_empty());
+    let local = match requested {
+        None => return Ok(real),
+        Some(value) => value.split('@').next().unwrap_or("").to_string(),
+    };
+    if local.is_empty() || local == user.username.to_ascii_lowercase() {
+        return Ok(real);
+    }
+
+    let store = crate::core::aliases::load();
+    match store.aliases.get(&local) {
+        Some(alias) if alias.username.eq_ignore_ascii_case(&user.username) && alias.disabled_at.is_none() => {
+            Ok(format!("{}@{}", local, domain))
+        }
+        Some(alias) if alias.username.eq_ignore_ascii_case(&user.username) => {
+            let err = serde_json::to_vec(&ErrorResponse {
+                error: format!("'{}' is switched off — turn it back on to send from it", local),
+                code: "alias_disabled".into(),
+            })
+            .unwrap();
+            Err(Response::from_data(err).with_status_code(409).with_header(json_header()))
+        }
+        _ => {
+            let err = serde_json::to_vec(&ErrorResponse {
+                error: format!("'{}' is not one of your addresses", local),
+                code: "unknown_alias".into(),
+            })
+            .unwrap();
+            Err(Response::from_data(err).with_status_code(400).with_header(json_header()))
+        }
+    }
+}
+
 pub fn send_email(
     request: &mut Request,
     user: Option<User>,
@@ -441,7 +490,10 @@ pub fn send_email(
             .with_header(json_header());
     }
 
-    let sender_address = format!("{}@{}", user.username, domain);
+    let sender_address = match sender_address_for(&user, req.from_alias.as_deref()) {
+        Ok(address) => address,
+        Err(resp) => return resp,
+    };
     if !req.from.trim().is_empty() && !req.from.eq_ignore_ascii_case(&sender_address) {
         log::warn!(
             "[API] User '{}' tried to send with envelope sender '{}' - overriding with '{}'",
@@ -818,7 +870,10 @@ pub fn send_encrypted(
             .with_header(json_header());
     }
 
-    let sender_address = format!("{}@{}", user.username, domain);
+    let sender_address = match sender_address_for(&user, req.from_alias.as_deref()) {
+        Ok(address) => address,
+        Err(resp) => return resp,
+    };
 
     // Disappearing mail, if the sender asked for it. Enforceable only for local
     // mailboxes: another provider's copy is theirs, not ours to delete.
@@ -932,7 +987,7 @@ pub fn send_encrypted(
                     starred: false,
                     e2ee: payload.e2ee,
                     userid: recipient_user.uid,
-                    from: format!("{}@{}", user.username, emailutils::get_server_domain()),
+                    from: sender_address.clone(),
                     to: vec![address.clone()],
                     timestamp: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)

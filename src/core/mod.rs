@@ -23,6 +23,7 @@ pub mod signup_ip;
 pub mod pending_users;
 
 pub mod aliases;
+pub mod arrival;
 pub mod scheduled;
 pub mod ephemeral;
 pub mod notes;

@@ -248,6 +248,10 @@ pub struct EmailBytesResponse {
     /// is never delivered through the preview path) can still be labelled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
+    /// Set when the message was addressed to an alias: the local part it arrived
+    /// at. A reply should go out from this address, not the account's real one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -329,6 +333,9 @@ pub struct SendEmailRequest {
     /// the subject that goes out is the one inside the MIME data.
     #[serde(default)]
     pub subject: String,
+    /// Send as one of this account's own aliases (local part or full address).
+    #[serde(default)]
+    pub from_alias: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -468,6 +475,9 @@ pub struct SendEncryptedRequest {
     /// For the sender's list of queued messages; not used for delivery.
     #[serde(default)]
     pub subject: String,
+    /// Send as one of this account's own aliases (local part or full address).
+    #[serde(default)]
+    pub from_alias: Option<String>,
 }
 
 /// How a message deletes itself.

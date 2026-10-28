@@ -1224,3 +1224,24 @@ body. Five files and 6,000,000 characters of armour per note.
 `POST /note/open` returns the same `files` array alongside the body, and the page
 decrypts them locally. Files are cleared with the body: on open (key mode), on
 `/note/burn` (passphrase mode), on withdrawal and on expiry.
+
+#### Sending as an alias
+
+`POST /email/send` and `POST /email/sendencrypted` accept `from_alias` — a local
+part or a full address belonging to the caller.
+
+- `400 unknown_alias` when it is not the caller's.
+- `409 alias_disabled` when it is theirs but switched off.
+- Absent or empty: the account address, exactly as before.
+
+The server sets the envelope sender; the client sets the `From:` header inside the
+MIME text, because on the encrypted path the server cannot read the headers. On
+local delivery the stored sender is the alias, so the recipient sees only that.
+
+#### Which address a message arrived at
+
+`POST /email/bulk` and `POST /email/get` return `alias` when the message was
+addressed to one of the caller's aliases — the local part, without the domain.
+Recorded in `data/arrival.json` (`{"arrivals": {"<uid>": {"alias": "...", "at": 0}}}`)
+and pruned after 180 days. It exists so a reply can leave from the address the
+sender actually wrote to.

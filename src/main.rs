@@ -119,6 +119,7 @@ fn main() -> Result<()> {
         thread::spawn(move || loop {
             crate::core::ephemeral::sweep(&sweeper_users, &sweeper_mail);
             crate::core::notes::sweep();
+            crate::core::arrival::sweep_old(crate::core::arrival::now());
             thread::sleep(std::time::Duration::from_secs(60));
         });
 
@@ -297,6 +298,8 @@ fn handle_smtp_connection(
         // blob, the pending hold and the group matching all land on the right
         // person. A switched-off alias resolves to nothing and the message is
         // refused here rather than disappearing into a hidden folder.
+        // The RCPT local part, kept because `username` below becomes the owner.
+        let delivered_to = username.to_ascii_lowercase();
         let alias_owner: Option<String> = if user_storage.get_user(username).is_some() {
             None
         } else {
@@ -368,6 +371,12 @@ fn handle_smtp_connection(
                         });
 
                         user_storage.add_email_to_matching_groups(username, email.uid, &received.from);
+
+                        // Remember the door it came through, so a reply can go back
+                        // out from the same address rather than the owner's real one.
+                        if alias_owner.is_some() {
+                            core::arrival::record(email.uid, &delivered_to);
+                        }
 
                         if let Err(e) = user_storage.save_to_file() {
                             warn!("[SMTP] Failed to persist user storage after delivery for '{}': {}", username, e);
