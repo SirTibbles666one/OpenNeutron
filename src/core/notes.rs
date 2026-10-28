@@ -399,6 +399,7 @@ mod tests {
             revoked_at: None,
             opens: 0,
             sender_uid: 7,
+            files: Vec::new(),
         }
     }
 
