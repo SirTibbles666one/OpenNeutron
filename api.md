@@ -1167,3 +1167,44 @@ delivered stays in the mailbox.
 ```
 Every local part that may receive mail: real accounts (pending signups excluded)
 plus switched-on aliases. Postfix's recipient map is built from this answer.
+
+### Scheduled send
+
+`POST /email/send` and `POST /email/sendencrypted` both accept `send_at` (unix
+seconds) and `subject` (a label for the sender's own list, never used for
+delivery). With `send_at` set to a time more than a minute and less than a year
+away, the message is held and the answer is:
+
+```json
+{ "scheduled": true, "id": "s18f…", "send_at": 1793161200, "to": ["a@b.c"] }
+```
+
+Nothing is delivered, and no sent copy is created, until it goes out. Sending
+limits are still counted at queue time, so a queue cannot exceed them. A plain
+message is stored as the finished MIME blob; an encrypted one is stored as the
+whole request and replayed through `/email/sendencrypted` when its time comes.
+
+Failures: `400 send_at_too_soon`, `400 send_at_too_far`, `409 too_many_scheduled`
+(fifty waiting per account).
+
+#### GET /scheduled  (JWT)
+```json
+{
+  "items": [
+    { "id": "s18f…", "to": ["a@b.c"], "subject": "Later", "created_at": 1793159000,
+      "send_at": 1793161200, "status": "pending", "kind": "encrypted",
+      "sent_at": null, "error": "" }
+  ],
+  "now": 1793159100,
+  "limit": 50
+}
+```
+`status` is `pending`, `sent`, `failed` or `cancelled`. Bodies are never
+returned. Finished rows are pruned after a day.
+
+#### POST /scheduled/cancel  (JWT)
+```json
+{ "id": "s18f…" }
+```
+`200 {"cancelled": true}`. `409 not_cancellable` once it has gone out, once it is
+already cancelled, or when it is not the caller's — one answer for all three.

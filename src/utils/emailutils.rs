@@ -218,3 +218,72 @@ fn skip_dns_name(data: &[u8], mut pos: usize) -> usize {
     }
     pos
 }
+/// Hand a finished message to the world: DKIM-sign it, group recipients by
+/// domain, resolve each domain's MX, and run one SMTP session per domain.
+///
+/// Shared by the API send path and the scheduler, so a message sent at 08:00 by
+/// a timer goes out under exactly the same rules as one sent by hand: same
+/// signing, same envelope sender, same MX resolution.
+///
+/// Returns how many recipients were accepted, plus one line per failure.
+pub fn deliver_raw(sender_address: &str, to: &[String], data: &[u8]) -> (usize, Vec<String>) {
+    use crate::smtp::EmailSendingFSM;
+
+    let mut delivered = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+
+    let mut by_domain: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for address in to {
+        match address.find('@') {
+            Some(pos) => by_domain
+                .entry(address[pos + 1..].to_lowercase())
+                .or_default()
+                .push(address.clone()),
+            None => failures.push(format!("{}: invalid email address", address)),
+        }
+    }
+
+    let signed: Vec<u8> = match get_dkim_signer() {
+        Some(signer) => match signer.sign(data) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("[SMTP] DKIM signing failed: {} - sending unsigned", e);
+                data.to_vec()
+            }
+        },
+        None => data.to_vec(),
+    };
+
+    for (rcpt_domain, addresses) in &by_domain {
+        let mx_host = match resolve_mx(rcpt_domain) {
+            Some(host) => host,
+            None => {
+                for address in addresses {
+                    failures.push(format!("{}: MX lookup failed for '{}'", address, rcpt_domain));
+                }
+                continue;
+            }
+        };
+
+        let mut fsm = match EmailSendingFSM::connect(&mx_host, 25, get_helo_domain()) {
+            Ok(f) => f,
+            Err(e) => {
+                for address in addresses {
+                    failures.push(format!("{}: SMTP connect to '{}' failed: {}", address, mx_host, e));
+                }
+                continue;
+            }
+        };
+
+        match fsm.send(sender_address, addresses, &signed) {
+            Ok(()) => delivered += addresses.len(),
+            Err(e) => {
+                for address in addresses {
+                    failures.push(format!("{}: SMTP error: {}", address, e));
+                }
+            }
+        }
+    }
+
+    (delivered, failures)
+}

@@ -4,6 +4,7 @@ pub mod twofactor;
 pub mod sessions;
 pub mod admin;
 pub mod aliases;
+pub mod scheduled;
 pub mod email;
 pub mod group;
 pub mod waitlist;

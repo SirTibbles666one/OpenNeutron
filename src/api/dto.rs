@@ -321,6 +321,14 @@ pub struct SendEmailRequest {
     #[serde(default)]
     #[allow(dead_code)]
     pub smtp_port: Option<u16>,
+    /// Unix seconds. When set, the message is held and released at that time
+    /// instead of going out now. Omitted or 0 means send immediately.
+    #[serde(default)]
+    pub send_at: Option<u64>,
+    /// For the sender's own list of queued messages. Never used for delivery —
+    /// the subject that goes out is the one inside the MIME data.
+    #[serde(default)]
+    pub subject: String,
 }
 
 #[derive(Deserialize)]
@@ -412,7 +420,7 @@ pub struct GetPublicKeysResponse {
 }
 
 /// The local copy metadata saved to the sender's sent_emails.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SentEmailLocalCopy {
     // 'from' is NOT deserialized - server fills it in
     pub to: Vec<String>,
@@ -429,7 +437,7 @@ pub struct SentEmailLocalCopy {
 }
 
 /// Per-recipient payload in the encrypted send request.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct RecipientPayload {
     /// RSA-OAEP encrypted AES-256 key for this recipient, base64-encoded.
     /// Required when 'e2ee == true'; empty string or omit when 'e2ee == false'.
@@ -442,7 +450,10 @@ pub struct RecipientPayload {
 }
 
 /// Request body for /email/sendencrypted
-#[derive(Deserialize)]
+///
+/// Serialized back out when the message is scheduled: the held copy is the
+/// request itself, so releasing it runs the same code path as sending now.
+#[derive(Deserialize, Serialize)]
 pub struct SendEncryptedRequest {
     pub localcopy: SentEmailLocalCopy,
     /// Map of "recipient@domain.com" -> { data, e2ee }
@@ -451,10 +462,16 @@ pub struct SendEncryptedRequest {
     /// this server; other providers keep whatever copy they are given.
     #[serde(default)]
     pub ephemeral: Option<EphemeralPolicy>,
+    /// Unix seconds. When set, the message is held and released then.
+    #[serde(default)]
+    pub send_at: Option<u64>,
+    /// For the sender's list of queued messages; not used for delivery.
+    #[serde(default)]
+    pub subject: String,
 }
 
 /// How a message deletes itself.
-#[derive(Deserialize, Debug, Clone, Copy, Default)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default)]
 pub struct EphemeralPolicy {
     /// Delete the stored copy the moment its body is served.
     #[serde(default)]

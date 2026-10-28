@@ -121,6 +121,61 @@ fn main() -> Result<()> {
             crate::core::notes::sweep();
             thread::sleep(std::time::Duration::from_secs(60));
         });
+
+        // Messages held for a chosen time. Thirty seconds is close enough to the
+        // minute people pick.
+        let sweeper_port = api_port;
+        thread::spawn(move || loop {
+            for item in crate::core::scheduled::due(crate::core::scheduled::now()) {
+                use crate::core::scheduled::Kind;
+                match item.kind {
+                    Kind::Raw => {
+                        let sender = format!("{}@{}", item.owner, crate::utils::emailutils::get_server_domain());
+                        let data = match crate::utils::decode_payload(&item.data) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                log::warn!("[Scheduled] '{}' has an undecodable body: {}", item.id, e);
+                                let _ = crate::core::scheduled::finish(&item.id, Some("the stored body was unreadable".into()));
+                                continue;
+                            }
+                        };
+                        let (delivered, failures) = crate::utils::emailutils::deliver_raw(&sender, &item.to, &data);
+                        if delivered == 0 && !failures.is_empty() {
+                            log::warn!("[Scheduled] '{}' failed: {}", item.id, failures.join("; "));
+                            let _ = crate::core::scheduled::finish(&item.id, Some(failures.join("; ")));
+                        } else {
+                            log::info!("[Scheduled] '{}' released to {} recipient(s)", item.id, delivered);
+                            let _ = crate::core::scheduled::finish(&item.id, None);
+                        }
+                    }
+                    Kind::Encrypted => {
+                        // Replayed through the send endpoint as its owner: the
+                        // encryption, the sent copy and the disappearing rule are
+                        // the endpoint's job, not a second implementation's.
+                        let released = match crate::utils::jwt::generate_jwt(&item.owner) {
+                            Ok(token) => release_over_http(sweeper_port, &token, &item.data),
+                            Err(e) => Err(format!("could not sign the release: {:?}", e)),
+                        };
+                        match released {
+                            Ok(200) => {
+                                log::info!("[Scheduled] '{}' released", item.id);
+                                let _ = crate::core::scheduled::finish(&item.id, None);
+                            }
+                            Ok(code) => {
+                                log::warn!("[Scheduled] '{}' was refused with {}", item.id, code);
+                                let _ = crate::core::scheduled::finish(&item.id, Some(format!("the server answered {}", code)));
+                            }
+                            Err(e) => {
+                                log::warn!("[Scheduled] '{}' could not be released: {}", item.id, e);
+                                let _ = crate::core::scheduled::finish(&item.id, Some(e));
+                            }
+                        }
+                    }
+                }
+            }
+            crate::core::scheduled::sweep_old(crate::core::scheduled::now());
+            thread::sleep(std::time::Duration::from_secs(30));
+        });
     }
 
     info!("SMTP server listening on 0.0.0.0:{}", cfg.server.smtp_port);
@@ -383,6 +438,8 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Post,      "/api/note/status",         Authenticated, endpoints::notes::status);
     router.add_route(Method::Post,      "/api/note/revoke",         Authenticated, endpoints::notes::revoke);
     router.add_route(Method::Get,       "/api/admin/recipients",    Admin, endpoints::admin::recipients);
+    router.add_route(Method::Get,       "/api/scheduled",           Authenticated, endpoints::scheduled::list);
+    router.add_route(Method::Post,      "/api/scheduled/cancel",    Authenticated, endpoints::scheduled::cancel);
     router.add_route(Method::Get,       "/api/aliases",             Authenticated, endpoints::aliases::list);
     router.add_route(Method::Post,      "/api/aliases",             Authenticated, endpoints::aliases::create);
     router.add_route(Method::Post,      "/api/aliases/disable",     Authenticated, endpoints::aliases::disable);
@@ -519,4 +576,36 @@ fn reconcile_orphaned_emails(user_storage: &UserStorage, email_storage: &EmailSt
     } else {
         info!("[Storage] Email index consistent ({} orphaned blob(s) ignored)", orphans);
     }
+}
+
+/// Hand a stored request back to our own API as the account that queued it.
+///
+/// A real HTTP call, not an internal shortcut: the released message then goes
+/// through the endpoint every other send goes through. The connection is to
+/// 127.0.0.1 and the token is minted here, so nothing is exposed by this.
+fn release_over_http(port: u16, token: &str, body: &str) -> std::result::Result<u16, String> {
+    use std::io::{Read, Write};
+
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
+        .map_err(|e| format!("could not reach the API: {}", e))?;
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(120)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(30)));
+
+    let head = format!(
+        "POST /api/email/sendencrypted HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        token,
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
+    stream.write_all(body.as_bytes()).map_err(|e| e.to_string())?;
+    stream.flush().ok();
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).map_err(|e| e.to_string())?;
+    response
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or_else(|| "the API gave no status line".to_string())
 }

@@ -61,6 +61,11 @@ fn erase_account(user_storage: &UserStorage, email_storage: &EmailStorage, usern
     crate::core::signup_ip::release_for(username);
     // Its addresses go with it: an alias left behind would keep accepting mail
     // for a mailbox that no longer exists.
+    match crate::core::scheduled::purge(username) {
+        Ok(n) if n > 0 => log::info!("[Admin] Dropped {} queued message(s) for '{}'", n, username),
+        Ok(_) => {}
+        Err(e) => log::warn!("[Admin] Could not drop queued messages for '{}': {}", username, e),
+    }
     match crate::core::aliases::purge(username) {
         Ok(n) if n > 0 => log::info!("[Admin] Removed {} alias(es) for '{}'", n, username),
         Ok(_) => {}

@@ -346,6 +346,26 @@ pub fn list_recent_email_uids(
     Response::from_data(body).with_status_code(200).with_header(json_header())
 }
 
+/// One shape for every reason a message could not be queued, so both send
+/// endpoints answer the same way.
+fn schedule_error(e: crate::core::scheduled::QueueError) -> Response<Cursor<Vec<u8>>> {
+    use crate::core::scheduled::QueueError;
+    let (status, code, message) = match e {
+        QueueError::TooMany => (
+            409,
+            "too_many_scheduled",
+            format!(
+                "You already have {} messages waiting. Send or cancel one first.",
+                crate::core::scheduled::MAX_PENDING_PER_OWNER
+            ),
+        ),
+        QueueError::TooSoon => (400, "send_at_too_soon", "Pick a time at least a minute from now".to_string()),
+        QueueError::TooFar => (400, "send_at_too_far", "That is more than a year away".to_string()),
+    };
+    let err = serde_json::to_vec(&ErrorResponse { error: message, code: code.into() }).unwrap();
+    Response::from_data(err).with_status_code(status).with_header(json_header())
+}
+
 pub fn send_email(
     request: &mut Request,
     user: Option<User>,
@@ -429,6 +449,28 @@ pub fn send_email(
         );
     }
 
+    // A message for later is stored now and released by the sweeper through the
+    // same delivery path. The sending limits were counted above, when the
+    // message was accepted: queueing cannot be used to exceed them.
+    if let Some(at) = req.send_at.filter(|at| *at > 0) {
+        match crate::core::scheduled::queue(
+            &user.username,
+            req.to.clone(),
+            crate::core::scheduled::Kind::Raw,
+            req.data.clone(),
+            req.subject.clone(),
+            at,
+        ) {
+            Ok(item) => {
+                let body = serde_json::to_vec(&serde_json::json!({
+                    "scheduled": true, "id": item.id, "send_at": item.send_at, "to": item.to,
+                })).unwrap();
+                return Response::from_data(body).with_status_code(200).with_header(json_header());
+            }
+            Err(e) => return schedule_error(e),
+        }
+    }
+
     // Delivery targets are resolved from each recipient's own domain. Taking a
     // host and port from the request body would turn this endpoint into an
     // arbitrary-destination TCP client against the server's internal network.
@@ -439,65 +481,9 @@ pub fn send_email(
         );
     }
 
-    let mut delivered = 0usize;
-    let mut failures: Vec<String> = Vec::new();
-
-    let mut by_domain: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-    for address in &req.to {
-        match address.find('@') {
-            Some(pos) => by_domain
-                .entry(address[pos + 1..].to_lowercase())
-                .or_default()
-                .push(address.clone()),
-            None => failures.push(format!("{}: invalid email address", address)),
-        }
-    }
-
-    // DKIM-sign the message before delivery. This is the path external recipients
-    // use (the encrypted path signs separately), and without this every outbound
-    // message leaves unsigned - receivers then report 'dkim=none' and score the
-    // domain accordingly.
-    let signed: Vec<u8> = match emailutils::get_dkim_signer() {
-        Some(signer) => match signer.sign(&data) {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!("[SMTP] DKIM signing failed: {} - sending unsigned", e);
-                data.clone()
-            }
-        },
-        None => data.clone(),
-    };
-
-    for (rcpt_domain, addresses) in &by_domain {
-        let mx_host = match emailutils::resolve_mx(rcpt_domain) {
-            Some(host) => host,
-            None => {
-                for address in addresses {
-                    failures.push(format!("{}: MX lookup failed for '{}'", address, rcpt_domain));
-                }
-                continue;
-            }
-        };
-
-        let mut fsm = match EmailSendingFSM::connect(&mx_host, 25, emailutils::get_helo_domain()) {
-            Ok(f) => f,
-            Err(e) => {
-                for address in addresses {
-                    failures.push(format!("{}: SMTP connect to '{}' failed: {}", address, mx_host, e));
-                }
-                continue;
-            }
-        };
-
-        match fsm.send(&sender_address, addresses, &signed) {
-            Ok(()) => delivered += addresses.len(),
-            Err(e) => {
-                for address in addresses {
-                    failures.push(format!("{}: SMTP error: {}", address, e));
-                }
-            }
-        }
-    }
+    // One delivery path for both an immediate send and a released scheduled
+    // message, so signing and MX resolution cannot drift apart.
+    let (delivered, failures) = emailutils::deliver_raw(&sender_address, &req.to, &data);
 
     if delivered == 0 {
         let err = serde_json::to_vec(&ErrorResponse {
@@ -764,6 +750,49 @@ pub fn send_encrypted(
         Ok(r) => r,
         Err(resp) => return resp,
     };
+
+    // Held for later: store the request as it arrived and let the sweeper replay
+    // it through this same endpoint, so a scheduled message is encrypted, saved
+    // and delivered by exactly the code that sends one now.
+    if let Some(at) = req.send_at.filter(|at| *at > 0) {
+        // Strip the scheduling fields from what is stored: the held copy must be
+        // a "send now" request, or releasing it would queue it again.
+        let held = serde_json::to_value(&req).ok().map(|mut value| {
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("send_at");
+                obj.remove("subject");
+            }
+            value
+        });
+        let payload = match held.and_then(|value| serde_json::to_string(&value).ok()) {
+            Some(p) => p,
+            None => {
+                log::error!("[API] Could not serialise a scheduled send");
+                let err = serde_json::to_vec(&ErrorResponse {
+                    error: "Could not hold that message for later".into(),
+                    code: "schedule_failed".into(),
+                }).unwrap();
+                return Response::from_data(err).with_status_code(500).with_header(json_header());
+            }
+        };
+        let to: Vec<String> = req.recipients.keys().cloned().collect();
+        match crate::core::scheduled::queue(
+            &user.username,
+            to,
+            crate::core::scheduled::Kind::Encrypted,
+            payload,
+            req.subject.clone(),
+            at,
+        ) {
+            Ok(item) => {
+                let body = serde_json::to_vec(&serde_json::json!({
+                    "scheduled": true, "id": item.id, "send_at": item.send_at, "to": item.to,
+                })).unwrap();
+                return Response::from_data(body).with_status_code(200).with_header(json_header());
+            }
+            Err(e) => return schedule_error(e),
+        }
+    }
 
     if req.recipients.is_empty() || req.recipients.len() > MAX_RECIPIENTS {
         let err = serde_json::to_vec(&ErrorResponse {
