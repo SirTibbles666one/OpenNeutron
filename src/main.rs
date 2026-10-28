@@ -453,6 +453,8 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Get,       "/api/me",                  Authenticated, endpoints::user::get_me);
     // Sealed notes, from the sender's side.
     router.add_route(Method::Post,      "/api/note/create",         Authenticated, endpoints::notes::create);
+    // Mail that arrives from a file rather than over SMTP.
+    router.add_route(Method::Post,      "/api/import/message",      Authenticated, endpoints::import::message);
     router.add_route(Method::Post,      "/api/note/status",         Authenticated, endpoints::notes::status);
     router.add_route(Method::Post,      "/api/note/revoke",         Authenticated, endpoints::notes::revoke);
     router.add_route(Method::Get,       "/api/admin/recipients",    Admin, endpoints::admin::recipients);
