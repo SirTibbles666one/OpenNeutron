@@ -109,12 +109,41 @@ pub fn subscribe(
     if !is_push_service(&req.endpoint) {
         return notify(400, "invalid_endpoint", "That does not look like a push endpoint");
     }
-    if req.keys.p256dh.is_empty() || req.keys.auth.is_empty() {
-        return notify(400, "invalid_keys", "A subscription needs both keys");
+    // Length is the whole check that matters: every later send seals to these
+    // bytes, and a stub key is accepted here, stored, then fails at send time
+    // with "bad p256dh: Invalid input length" once per message. Refusing it at
+    // subscribe is the only place the subscriber can see the failure.
+    match keys_are_usable(&req.keys.p256dh, &req.keys.auth) {
+        Ok(()) => {}
+        Err(why) => return notify(400, "invalid_keys", why),
     }
 
     push::save(&user.username, &req.endpoint, &req.keys.p256dh, &req.keys.auth, &req.ua);
     out(200, serde_json::to_vec(&json!({ "message": "Notifications are on" })).unwrap_or_default())
+}
+
+
+/// A P-256 public key is an uncompressed point (65 bytes: `04` + X + Y) and the
+/// auth secret is 16 bytes, both base64url without padding.
+fn keys_are_usable(p256dh: &str, auth: &str) -> Result<(), &'static str> {
+    let point = b64url(p256dh).ok_or("The subscription's public key is not valid base64url")?;
+    if point.len() != 65 || point[0] != 4 {
+        return Err("The subscription's public key is not a P-256 point");
+    }
+    let secret = b64url(auth).ok_or("The subscription's auth secret is not valid base64url")?;
+    if secret.len() != 16 {
+        return Err("The subscription's auth secret is the wrong length");
+    }
+    Ok(())
+}
+
+fn b64url(raw: &str) -> Option<Vec<u8>> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    URL_SAFE_NO_PAD.decode(trimmed.trim_end_matches('=')).ok()
 }
 
 #[derive(Deserialize)]
