@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ml-kem = { version = "0.3", features = ["getrandom"] }
+hkdf = "0.12"
 aes-gcm = "0.10"
 base64 = "0.22.1"
 bincode = "1.3"

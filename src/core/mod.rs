@@ -28,3 +28,4 @@ pub mod scheduled;
 pub mod ephemeral;
 pub mod notes;
 pub mod push;
+pub mod pqkeys;

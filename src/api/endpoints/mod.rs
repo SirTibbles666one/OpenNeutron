@@ -12,3 +12,4 @@ pub mod waitlist;
 pub mod pgp;
 pub mod notes;
 pub mod import;
+pub mod pqkeys;
