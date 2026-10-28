@@ -1245,3 +1245,19 @@ addressed to one of the caller's aliases — the local part, without the domain.
 Recorded in `data/arrival.json` (`{"arrivals": {"<uid>": {"alias": "...", "at": 0}}}`)
 and pruned after 180 days. It exists so a reply can leave from the address the
 sender actually wrote to.
+
+#### New-mail notifications (Web Push)
+
+- `GET /api/push/key` — the VAPID public key (uncompressed P-256 point,
+  base64url). Open by design; the browser needs it before it can subscribe.
+- `POST /api/push/subscribe` — `{endpoint, keys: {p256dh, auth}, ua?}`. The
+  endpoint must be a browser push service (`*.google.com/fcm/send/*`,
+  `*push.services.mozilla.com/wpush/*`, `web.push.apple.com`,
+  `*.notify.windows.com`), else `400 invalid_endpoint`. One row per endpoint.
+- `POST /api/push/unsubscribe` — `{endpoint}`.
+- `GET /api/push/status` — `{subscribed, count}` for the caller.
+- `POST /api/push/test` — sends one now; `409 not_subscribed` when nothing is
+  registered.
+
+Payloads are sealed per RFC 8291 (ECDH P-256 → AES-128-GCM) and carry only a
+title and a sender. Endpoints answering 404/410 are deleted automatically.

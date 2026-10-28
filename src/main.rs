@@ -381,6 +381,15 @@ fn handle_smtp_connection(
                         if let Err(e) = user_storage.save_to_file() {
                             warn!("[SMTP] Failed to persist user storage after delivery for '{}': {}", username, e);
                         }
+
+                        // Tell their browsers, on a thread of its own: saving mail
+                        // must never wait on somebody else's push service.
+                        core::push::notify_async(
+                            username,
+                            "New mail",
+                            &format!("From {}", received.from),
+                        );
+
                         info!("[SMTP] Email uid={} queued for user '{}' (total emails: {})",
                             email.uid, username,
                             user_storage.get_user(username).map(|u| u.emailIds.len()).unwrap_or(0));
@@ -449,6 +458,14 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Get,       "/api/admin/recipients",    Admin, endpoints::admin::recipients);
     router.add_route(Method::Get,       "/api/scheduled",           Authenticated, endpoints::scheduled::list);
     router.add_route(Method::Post,      "/api/scheduled/cancel",    Authenticated, endpoints::scheduled::cancel);
+    // New-mail notifications. The key is public by design: the browser needs it
+    // before it can subscribe, and it proves nothing on its own.
+    router.add_route(Method::Get,  "/api/push/key",         Open,          endpoints::push::key);
+    router.add_route(Method::Post, "/api/push/subscribe",   Authenticated, endpoints::push::subscribe);
+    router.add_route(Method::Post, "/api/push/unsubscribe", Authenticated, endpoints::push::unsubscribe);
+    router.add_route(Method::Get,  "/api/push/status",      Authenticated, endpoints::push::status);
+    router.add_route(Method::Post, "/api/push/test",        Authenticated, endpoints::push::test);
+
     router.add_route(Method::Get,       "/api/aliases",             Authenticated, endpoints::aliases::list);
     router.add_route(Method::Post,      "/api/aliases",             Authenticated, endpoints::aliases::create);
     router.add_route(Method::Post,      "/api/aliases/disable",     Authenticated, endpoints::aliases::disable);

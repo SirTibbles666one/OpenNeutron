@@ -1047,6 +1047,14 @@ pub fn send_encrypted(
                             }
                         }
 
+                        // A message from another mailbox on this server is still
+                        // a message: the recipient should hear about it the same way.
+                        crate::core::push::notify_async(
+                            &username,
+                            "New mail",
+                            &format!("From {}@{}", user.username, emailutils::get_server_domain()),
+                        );
+
                         local_delivered += 1;
                         delivery_results.push(DeliveryResult {
                             address: address.clone(),
