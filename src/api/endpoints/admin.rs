@@ -79,6 +79,10 @@ fn erase_account(user_storage: &UserStorage, email_storage: &EmailStorage, usern
     if let Err(e) = crate::core::pqkeys::remove(username) {
         log::warn!("[Admin] Could not remove post-quantum keys for '{}': {}", username, e);
     }
+    // The deletion log goes with the account, for the same reason the keys do.
+    if let Err(e) = crate::core::mailboxlog::forget(username) {
+        log::warn!("[Admin] Could not clear the deletion log for '{}': {}", username, e);
+    }
     // A deleted account must not linger in the approval queue: approving a ghost
     // would 404, and the panel would keep offering a button that cannot work.
     if let Err(e) = crate::core::pending_users::remove(username) {

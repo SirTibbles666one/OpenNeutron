@@ -247,6 +247,11 @@ pub fn delete_email(
         let err = serde_json::to_vec(&ErrorResponse { error: "Failed to delete email".into(), code: "delete_failed".into() }).unwrap();
         return Response::from_data(err).with_status_code(500).with_header(json_header());
     }
+    // Written only after the blob is gone: a log entry for a message that is
+    // still there would be worse than no entry at all.
+    if let Err(e) = crate::core::mailboxlog::append(&user.username, "deleted", &req.uid.to_string()) {
+        log::warn!("[Log] Could not record deletion of {}: {}", req.uid, e);
+    }
 
     let msg = serde_json::to_vec(&MessageResponse { message: "Email deleted".into() }).unwrap();
     Response::from_data(msg).with_status_code(200).with_header(json_header())

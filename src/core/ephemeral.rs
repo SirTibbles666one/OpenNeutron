@@ -234,6 +234,10 @@ pub fn sweep(user_storage: &UserStorage, email_storage: &EmailStorage) {
         if expired {
             if purge_message(user_storage, email_storage, &entry.owner, entry.uid) {
                 let _ = remove_entry(entry.uid);
+                // A timer is a deletion too, and the log has to cover it: mail that
+                // vanishes because its hour ran out must not look like mail that
+                // vanished without a record.
+                let _ = crate::core::mailboxlog::append(&entry.owner, "expired", &entry.uid.to_string());
                 log::info!(
                     "[Ephemeral] Expired uid={} for '{}' (sent by {})",
                     entry.uid, entry.owner, entry.sender
