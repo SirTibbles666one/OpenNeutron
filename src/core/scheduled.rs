@@ -246,6 +246,62 @@ pub fn cancel(owner: &str, id: &str) -> io::Result<bool> {
     Ok(true)
 }
 
+/// Replace a held message without changing its id.
+///
+/// A held message is a finished client request, stored exactly as it was built, so
+/// editing means swapping in a newly built one — the server never writes a body of
+/// its own. Only a *pending* item can be replaced: a released or failed one is
+/// history, and rewriting it would let a sender claim that a message already
+/// delivered said something else. `Ok(None)` means "no such pending item of yours",
+/// the same single answer `cancel` gives, so neither can be used to probe for ids.
+pub fn reschedule(
+    owner: &str,
+    id: &str,
+    to: Vec<String>,
+    data: String,
+    subject: String,
+    send_at: u64,
+) -> Result<Option<Item>, QueueError> {
+    let _held = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let path = path();
+    let mut store = read_at(&path);
+
+    let kind = match store.items.get(id) {
+        Some(i) if i.owner.eq_ignore_ascii_case(owner) => {
+            if i.status != Status::Pending {
+                return Ok(None);
+            }
+            i.kind
+        }
+        _ => return Ok(None),
+    };
+
+    let current = now();
+    if send_at <= current + 5 {
+        return Err(QueueError::TooSoon);
+    }
+    if send_at > current + MAX_AHEAD_SECONDS {
+        return Err(QueueError::TooFar);
+    }
+
+    let item = match store.items.get_mut(id) {
+        Some(i) => i,
+        None => return Ok(None),
+    };
+    item.to = to;
+    item.kind = kind;
+    item.data = data;
+    item.subject = subject.chars().take(120).collect();
+    item.send_at = send_at;
+    item.error.clear();
+    let updated = item.clone();
+    write_at(&path, &store).map_err(|e| {
+        log::error!("[Scheduled] Could not save the edit to '{}': {}", id, e);
+        QueueError::TooSoon
+    })?;
+    Ok(Some(updated))
+}
+
 /// Everything that is due, oldest deadline first. The caller delivers and then
 /// reports back with `finish`.
 pub fn due(at: u64) -> Vec<Item> {

@@ -478,6 +478,10 @@ pub struct SendEncryptedRequest {
     /// Send as one of this account's own aliases (local part or full address).
     #[serde(default)]
     pub from_alias: Option<String>,
+    /// Replace a message already held, instead of queueing another. The id is kept,
+    /// so the sender's list and their device-side copy still line up.
+    #[serde(default)]
+    pub replace_id: Option<String>,
 }
 
 /// How a message deletes itself.

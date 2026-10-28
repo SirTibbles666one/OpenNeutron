@@ -817,6 +817,9 @@ pub fn send_encrypted(
             if let Some(obj) = value.as_object_mut() {
                 obj.remove("send_at");
                 obj.remove("subject");
+                // A released copy must not try to edit anything: the id it names
+                // is what it was, not what it is about to become.
+                obj.remove("replace_id");
             }
             value
         });
@@ -832,19 +835,54 @@ pub fn send_encrypted(
             }
         };
         let to: Vec<String> = req.recipients.keys().cloned().collect();
-        match crate::core::scheduled::queue(
-            &user.username,
-            to,
-            crate::core::scheduled::Kind::Encrypted,
-            payload,
-            req.subject.clone(),
-            at,
-        ) {
-            Ok(item) => {
+        let replacing = req
+            .replace_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty());
+
+        let queued = match replacing {
+            Some(id) => crate::core::scheduled::reschedule(
+                &user.username,
+                id,
+                to,
+                payload,
+                req.subject.clone(),
+                at,
+            )
+            .map(|maybe| maybe.map(|item| (item, true))),
+            None => crate::core::scheduled::queue(
+                &user.username,
+                to,
+                crate::core::scheduled::Kind::Encrypted,
+                payload,
+                req.subject.clone(),
+                at,
+            )
+            .map(|item| Some((item, false))),
+        };
+
+        match queued {
+            Ok(Some((item, replaced))) => {
                 let body = serde_json::to_vec(&serde_json::json!({
-                    "scheduled": true, "id": item.id, "send_at": item.send_at, "to": item.to,
-                })).unwrap();
+                    "scheduled": true,
+                    "replaced": replaced,
+                    "id": item.id,
+                    "send_at": item.send_at,
+                    "to": item.to,
+                }))
+                .unwrap();
                 return Response::from_data(body).with_status_code(200).with_header(json_header());
+            }
+            // Nothing of theirs is pending under that id: one answer for "already
+            // sent", "already cancelled" and "not yours", so ids cannot be probed.
+            Ok(None) => {
+                let err = serde_json::to_vec(&ErrorResponse {
+                    error: "That message has already gone, or cannot be edited".into(),
+                    code: "not_editable".into(),
+                })
+                .unwrap();
+                return Response::from_data(err).with_status_code(409).with_header(json_header());
             }
             Err(e) => return schedule_error(e),
         }

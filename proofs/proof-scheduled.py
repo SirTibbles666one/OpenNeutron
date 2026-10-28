@@ -183,6 +183,60 @@ def main():
     raw_id = res.get("id")
     check("raw message held", status == 200 and res.get("scheduled") is True, str(res))
 
+    print("editing a held message")
+    edit_subject = f"sched-edit-{now}"
+    def held_request(subject, at):
+        return {
+            "localcopy": {
+                "to": [to],
+                "timestamp": now,
+                "public_key_hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                "raw_data": __import__("base64").b64encode(raw_message(subject, to)).decode(),
+                "message_key": "",
+                "e2ee": False,
+            },
+            "recipients": {
+                to: {
+                    "aes_encrypted": "",
+                    "data_encrypted": __import__("base64").b64encode(raw_message(subject, to)).decode(),
+                    "e2ee": False,
+                }
+            },
+            "send_at": at,
+            "subject": subject,
+        }
+
+    status, res = call("POST", "/email/sendencrypted", held_request(edit_subject, now + 90), tok)
+    edit_id = res.get("id")
+    check("edit target is held", status == 200 and res.get("scheduled") is True, str(res))
+
+    new_subject = f"sched-edited-{now}"
+    edited = held_request(new_subject, now + 100)
+    edited["replace_id"] = edit_id
+    rows_before = len([r for r in scheduled_rows(tok) if r["status"] == "pending"])
+    status, res = call("POST", "/email/sendencrypted", edited, tok)
+    check("edit accepted", status == 200 and res.get("replaced") is True, str(res))
+    check("edit keeps the id", res.get("id") == edit_id, str(res))
+
+    rows = {r["id"]: r for r in scheduled_rows(tok)}
+    check("the subject changed", rows.get(edit_id, {}).get("subject") == new_subject, str(rows.get(edit_id)))
+    check("the time changed", rows.get(edit_id, {}).get("send_at") == now + 100, str(rows.get(edit_id)))
+    check("no second message was queued",
+          len([r for r in scheduled_rows(tok) if r["status"] == "pending"]) == rows_before,
+          f"{rows_before} before, {len([r for r in scheduled_rows(tok) if r['status'] == 'pending'])} after")
+
+    # Someone else naming the id must not touch it.
+    status, res = call("POST", "/email/sendencrypted", edited, other)
+    check("a stranger cannot edit it",
+          status == 409 and res.get("code") == "not_editable", f"{status} {res}")
+
+    check("a time in the past is still refused when editing",
+          call("POST", "/email/sendencrypted", {**held_request(new_subject, now - 60), "replace_id": edit_id}, tok)[0] == 400)
+
+    check("the message is still there after the refusals",
+          any(r["id"] == edit_id and r["status"] == "pending" for r in scheduled_rows(tok)))
+    check("an edit can be cancelled", call("POST", "/scheduled/cancel", {"id": edit_id}, tok)[0] == 200)
+
     print("encrypted path (what the compose window uses)")
     inbox_before = mailbox_size(tok)
     subject = f"sched-enc-{now}"
@@ -219,6 +273,10 @@ def main():
     check("a sent copy exists now", sent_copy >= 1, str(sent_copy))
     check("raw message marked sent", wait_until(
         lambda: any(r["id"] == raw_id and r["status"] == "sent" for r in scheduled_rows(tok)), 60))
+    status, res = call("POST", "/email/sendencrypted",
+                       {**held_request(f"too-late-{now}", now + 120), "replace_id": held_id}, tok)
+    check("a message that has gone cannot be edited",
+          status == 409 and res.get("code") == "not_editable", f"{status} {res}")
 
     # Cleanup: the proof owns these accounts, so it removes them.
     for name in (OWNER, STRANGER):
