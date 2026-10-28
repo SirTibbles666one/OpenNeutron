@@ -214,7 +214,9 @@ impl Router {
                     let response = Response::from_data(bytes)
                         .with_status_code(200)
                         .with_header(content_type);
-                    let _ = request.respond(with_static_security_headers(response));
+                    // Security headers live in one place: nginx. Setting them here
+                    // too sent every one of them twice.
+                    let _ = request.respond(response);
                     return;
                 }
                 Err(_) => {
@@ -284,21 +286,6 @@ fn percent_decode(input: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Static assets are same-origin only and must never be framed or MIME-sniffed.
-fn with_static_security_headers(mut response: Response<Cursor<Vec<u8>>>) -> Response<Cursor<Vec<u8>>> {
-    let headers = [
-        ("X-Content-Type-Options", "nosniff"),
-        ("X-Frame-Options", "DENY"),
-        ("Referrer-Policy", "no-referrer"),
-    ];
-    for (name, value) in headers {
-        if let Ok(header) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {
-            response = response.with_header(header);
-        }
-    }
-    response
 }
 
 fn mime_type(path: &Path) -> &'static str {
