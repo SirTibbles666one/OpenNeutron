@@ -89,6 +89,30 @@ impl Router {
             })?;
 
         let user = self.user_storage.get_user(&claims.sub)?;
+
+        // Revocation check: a token whose session was signed out, or that was
+        // issued before a "sign out everywhere", must not act.
+        let raw_token = request
+            .headers()
+            .iter()
+            .find(|h| h.field.equiv("Authorization"))
+            .map(|h| h.value.to_string().trim_start_matches("Bearer ").trim().to_string())
+            .unwrap_or_default();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if !crate::core::sessions::validate(
+            &claims.sub,
+            claims.sid.as_deref(),
+            claims.iat as u64,
+            &raw_token,
+            now,
+        ) {
+            log::info!("[API] Token for '{}' belongs to a revoked session", claims.sub);
+            return None;
+        }
+
         if (claims.iat as u64) < user.credentials_changed_at {
             log::info!(
                 "[API] Rejected token for '{}' issued before an administrative credential reset",

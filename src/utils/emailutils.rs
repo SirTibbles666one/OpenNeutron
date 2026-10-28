@@ -7,6 +7,21 @@ use rand::RngCore;
 
 static DKIM_SIGNER: OnceCell<Arc<DkimSigner>> = OnceCell::new();
 static SERVER_DOMAIN: OnceCell<String> = OnceCell::new();
+static HELO_DOMAIN: OnceCell<String> = OnceCell::new();
+
+/// The name this server announces over SMTP. It must resolve to this host and
+/// match the reverse DNS record, otherwise receivers see a HELO/PTR mismatch (and
+/// a HELO name whose A record points elsewhere is worse than no name at all).
+pub fn init_helo_domain(name: String) {
+    let _ = HELO_DOMAIN.set(name);
+}
+
+pub fn get_helo_domain() -> &'static str {
+    HELO_DOMAIN
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or_else(|| get_server_domain())
+}
 
 pub fn init_dkim_signer(signer: DkimSigner) {
     let _ = DKIM_SIGNER.set(Arc::new(signer));

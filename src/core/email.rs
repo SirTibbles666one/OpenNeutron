@@ -149,6 +149,23 @@ impl EmailStorage {
         return Path::new(&email_path).exists();
     }
 
+    /// Every uid for which a blob exists on disk, derived from the filenames.
+    pub fn list_all_uids(&self) -> Vec<u128> {
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&self.storageDir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if let Some(stem) = name.strip_suffix(".bin") {
+                    if let Ok(uid) = stem.parse::<u128>() {
+                        out.push(uid);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn read_email(&self, email_uid: u128) -> Result<Email> {
         let email_path = format!("{}/{}.bin", self.storageDir, email_uid);
         if !Path::new(&email_path).exists() {

@@ -84,6 +84,13 @@ Codes shared by many endpoints:
 >
 > **Failures**: every rejected login returns '401' with code 'invalid_credentials' and the same message, whether the account exists or not - the endpoint deliberately does not reveal which mailboxes exist. After 10 failed attempts against one account, or 100 from one source address, within 15 minutes, further attempts return '429 too_many_attempts' until the window elapses.
 >
+> **Pending accounts**: a self-registered account that is still waiting for
+> approval returns '403' with code 'account_pending' and no token. The check runs
+> *after* the password is verified - a correct password on a queued account is
+> told it is queued, not that it is wrong - and *before* any token is minted, so
+> approval cannot be bypassed by logging in. This failure is not counted against
+> the rate limiter.
+>
 > **'salt'**: A per-user random hex string (32 hex chars / 16 bytes of entropy) generated at account creation time. The client uses this together with the user's password to derive the AES key that encrypts the private key. Always returned on successful login regardless of 'force_reset'.
 >
 > **'encrypted_private_key'**: The user's RSA private key, AES-256 encrypted client-side. 'null' for admin-created accounts that have not yet completed setup.
@@ -108,12 +115,30 @@ anything else is rejected with '400 invalid_public_key'.
 ```
 > 'password' is the client-side password token (e.g. a hash computed in the browser). The server stores and compares it as-is.
 > 'encrypted_private_key' is the RSA private key encrypted client-side with AES-256 using a key derived from the password and the salt (returned on login).
-**Response**: 'MessageResponse'
+>
+> When 'server.registration_requires_approval' is on, an 'invite_code' admits the
+> account immediately and a signup **without** one is created in a *pending*
+> state: it exists, it cannot sign in, and an administrator has to approve it.
+> A code that is presented but does not claim is rejected with
+> '403 invite_required' rather than queued, so a typo is not mistaken for a
+> request.
+
+**Response** (201, admitted): 'MessageResponse'
 ```json
 {
   "message": "User created"
 }
 ```
+
+**Response** (202, queued for approval)
+```json
+{
+  "pending": true,
+  "message": "Your account is waiting for approval"
+}
+```
+> A 202 carries no session token: the account cannot sign in until it is
+> approved. Do not treat it as an error.
 
 ### Secure Routes (JWT Required)
 
@@ -134,7 +159,12 @@ anything else is rejected with '400 invalid_public_key'.
 ```
 
 #### POST /user/setup
-Used during the initial account setup flow. When a user receives 'force_reset: true' after login (i.e. the account was provisioned by an admin and has no password yet), they must call this endpoint to define their password and public key before normal use. All cryptographic operations are performed client-side - 'password' is a hash string and 'public_key' is base64-encoded. Only works while the account is in the 'force_reset' state; returns '409' if a password is already set.
+Used to finish an account. Two states reach this endpoint:
+
+1. **No password yet** — the account was provisioned by an administrator. The caller defines the password and public key ('force_reset: true' in the login response).
+2. **Password but no keys yet** — a self-registered account. Its password was chosen at registration, so the 'password' field is accepted but **ignored**: this endpoint is not a password reset, and letting it write one would turn a session token into a credential change.
+
+An account that already has keys is configured; re-keying it here returns '409'. All cryptographic operations are performed client-side - 'password' is a hash string and 'public_key' is base64-encoded.
 
 **Request**: 'SetupPasswordRequest'
 ```json
@@ -144,7 +174,7 @@ Used during the initial account setup flow. When a user receives 'force_reset: t
   "encrypted_private_key": "base64-string"
 }
 ```
-> 'password' is the client-side password token stored as-is. 'encrypted_private_key' is the RSA private key encrypted client-side with AES-256.
+> 'password' is the client-side password token, stored as-is when the account had none. 'encrypted_private_key' is the RSA private key encrypted client-side with AES-256.
 **Response**: 'MessageResponse'
 ```json
 {
@@ -281,6 +311,60 @@ Grant or revoke admin privileges for a user.
   ]
 }
 ```
+
+#### GET /admin/pending
+Accounts created by signup that are waiting for approval (`data/pending_users.json`).
+
+**Request**: None
+**Response**
+```json
+{
+  "entries": [
+    {
+      "username": "string",
+      "requested_at": 1234567890,
+      "ip": "203.0.113.9",
+      "user_agent": "string"
+    }
+  ],
+  "total": 1
+}
+```
+
+#### POST /admin/pending/approve
+Let a queued account sign in. Removing the queue entry *is* the activation;
+nothing else about the account changes, so the person signs in with the password
+they chose at signup.
+
+**Request**
+```json
+{
+  "username": "string"
+}
+```
+**Response**
+```json
+{
+  "username": "string",
+  "approved": true
+}
+```
+> '404 not_pending' if the account is not queued, '404 user_not_found' if it was
+> deleted while queued (the stale entry is dropped in that case).
+
+#### POST /admin/pending/deny
+Delete a queued account and its request. Same refusals as 'DELETE /admin/users'
+('cannot_delete_self', 'last_admin'). Denying is the safe default for an
+unapproved signup: the account already occupies its username and, until the
+recipient sync runs, would be a valid recipient.
+
+**Request**
+```json
+{
+  "username": "string"
+}
+```
+**Response**: 'MessageResponse'
 
 #### POST /email/get
 **Request**: 'GetEmailRequest'
@@ -474,6 +558,180 @@ All endpoints that return email data ('/email/get', '/email/bulk') now include a
 > **'e2ee'**: 'true' when the blob was client-side encrypted (stored as-is via 'OPNTRN E2EE' or via the sender's 'e2ee: true' flag). 'false' when the server applied its own at-rest encryption. The client uses this flag to determine the source of the key material: for E2EE emails the keys were generated client-side by the sender; for server-encrypted emails the server generated the keys using the recipient's stored public key.
 >
 > Emails also carry a 'starred' boolean flag (set via 'POST /email/star'). The flag is **not** included in 'EmailBytesResponse' - it is a server-side metadata flag only. To star or unstar an email, use 'POST /email/star'.
+
+#### Disappearing messages
+
+A message can be told to delete itself. Two rules exist, independently or together:
+
+- **on read** - the stored copy is deleted the moment its body is served.
+- **on a timer** - the stored copy is deleted after N seconds, read or not (60 s to 90 days).
+
+'EmailBytesResponse' carries four fields for them:
+
+```json
+{
+  "ephemeral": "read | expire",
+  "expires_at": 1793152758,
+  "deleted": true,
+  "from": "alice@example.com"
+}
+```
+
+- **'ephemeral'** - omitted for ordinary mail. '"read"' means the message deletes itself when opened, '"expire"' means it has a deadline.
+- **'expires_at'** - unix seconds, only for the timer rule.
+- **'deleted'** - **true only when serving this very response deleted the message.** A failed delete reports 'false' and leaves the message in place; a client must not show "deleted" for any other reason.
+- **'from'** - the plaintext sender, so a preview whose body is withheld can still be labelled.
+
+Enforcement is deliberately server-side:
+
+- **'/email/bulk' never returns the body of a message that deletes on read.** 'data' is empty and 'message_key' is 'null' for those uids; the row can still be listed (labelled "Disappearing message") but the only door to the content is '/email/get', which deletes as it hands it over. A preview fetch therefore cannot consume or retain the message.
+- **'/email/get' deletes before answering.** The blob, the user's index entry and any group membership are removed first; if the blob cannot be removed the response says 'deleted: false' instead of claiming the copy is gone.
+- **A second open is '404' 'email_not_found'.**
+- **Timers are swept in the background** (every 60 s), including for messages nobody opened.
+- **Only local mailboxes are covered.** A copy at another provider is that provider's to keep: 'ephemeral' is applied to recipients on this server and ignored for anyone else.
+
+Deletion scope: the **recipient's** copy is deleted. The sender's own copy in 'sent_emails' stays, and the sender gets a read receipt instead, via 'POST /email/ephemeral' (below).
+
+#### 'POST /email/ephemeral'
+
+Reports the state of disappearing messages from either side. Authenticated; answers only for messages the caller owns.
+
+```json
+// request - ids as strings or numbers; a u128 does not survive a JS number,
+// so the web client sends strings.
+{ "uids": ["60349880548505824788395930780103824333"] }
+```
+
+```json
+// response
+{
+  "items": [
+    { "uid": "60349880548505824788395930780103824333",
+      "state": "armed",              // or "read"
+      "expires_at": 1793152756,      // timer, when it has one
+      "read_at": 1793151895,         // set once the recipient opened it
+      "recipient": "bob" }           // named once it has been read
+  ]
+}
+```
+
+- '"armed"' - still waiting: the recipient has not opened it (or the timer is running).
+- '"read"' - the recipient's copy is gone; the record is a 30-day receipt kept for the sender.
+- A uid the caller does not own is simply absent from 'items'.
+
+---
+
+### Sealed notes (recipients on other providers)
+
+A message delivered by SMTP belongs to the recipient's provider, so 'ephemeral'
+cannot delete it. For those recipients the body is not delivered at all: it is
+PGP-encrypted on the client, stored here, and announced by a link. Opening the
+link hands the armour over and deletes it in the same write.
+
+The server cannot read a note. It stores ciphertext and a token, nothing else.
+
+#### 'POST /note/create'  (JWT)
+
+```json
+{
+  "recipient": "someone@startmail.com",
+  "subject": "Re: Lol",
+  "armored": "-----BEGIN PGP MESSAGE-----...",
+  "deletes_on_read": true,
+  "expires_in_seconds": 604800,
+  "mode": "pgp"          // or "passphrase"
+}
+```
+
+```json
+{
+  "token": "hK3…32 chars…",
+  "url": "https://mail.example.com/api/note?t=hK3…",
+  "expires_at": 1793753956,
+  "deletes_on_read": true
+}
+```
+
+- 'armored' must be PGP armour; anything else is refused ('400 not_armored')
+  rather than stored as if it were sealed.
+- Body only: 512 KB cap, no attachments ('413 note_too_large').
+- 'expires_in_seconds' is clamped to 60 … 90 days. Every note gets a deadline
+  even when the sender picked "delete when read", so a note whose notification
+  never arrives cannot sit on disk forever — the client supplies 7 days.
+- At most 50 unopened notes per account ('429 too_many_notes').
+- 'mode': '"pgp"' (default) — armour locked to the recipient's key, cleared the
+  moment it is served. '"passphrase"' — symmetric armour the page decrypts in
+  the browser; a wrong phrase must not burn the note, so a fetch does not clear
+  it: 'POST /note/burn' does, after a successful decrypt, or the timer. The link
+  stops working after 5 fetches ('410 already_opened').
+
+#### 'GET /note?t=<token>'  (open)
+
+Returns an HTML page: who sent it, when it closes, and a button. It deliberately
+does **not** consume the note — mail providers and security scanners fetch links,
+and a fetched link must not burn the message before the recipient sees it.
+Answered with '404' (unknown token) or '410' (already opened or expired).
+'HEAD' returns the status without a body.
+
+#### 'POST /note/open'  (open)
+
+```json
+{ "token": "hK3…" }
+```
+
+```json
+{ "armored": "-----BEGIN PGP MESSAGE-----...", "from": "tibs",
+  "subject": "Re: Lol", "recipient": "someone@startmail.com",
+  "created_at": 1793149956, "deleted": true }
+```
+
+- The ciphertext is cleared and served under one lock: two simultaneous opens
+  cannot both receive the body.
+- '410 already_opened' on the second call, '410 expired' after the deadline,
+  '404 no_such_note' for a token that never existed.
+- The record (without the body) is kept so the sender can be told what happened.
+
+#### 'POST /note/burn'  (open)
+
+```json
+{ "token": "hK3…" }
+```
+
+Clears a passphrase note once its text is on screen. Harmless if called twice,
+and returns '200 {"burned": true}' either way; the note then reports
+'"opened"' and a second fetch is '410'.
+
+#### 'POST /note/revoke'  (JWT)
+
+```json
+{ "token": "hK3…" }
+```
+
+Withdraws a note before it is read: the armour is cleared and the link stops
+working (its page reports "withdrawn", 'open' is '404'). '200 {"revoked": true}'
+on success; '409 not_revocable' when the note is already read, already withdrawn,
+or not the caller's — one answer for all three, so this cannot be used to probe
+which tokens exist.
+
+#### 'POST /note/status'  (JWT)
+
+```json
+{ "tokens": ["hK3…", "Zq9…"] }
+```
+
+```json
+{ "notes": [ { "token": "hK3…", "state": "sealed",
+               "subject": "Re: Lol", "recipient": "someone@startmail.com",
+               "mode": "passphrase", "created_at": 1793149956,
+               "opened_at": null, "expires_at": 1793753956 } ] }
+```
+
+- '"sealed"' - waiting; '"opened"' - link used, body gone; '"expired"' - timer
+  won; '"revoked"' - withdrawn by the sender before it was read.
+- Only the owner's notes are returned; someone else's token is absent, not
+  refused, so a caller cannot probe which tokens exist.
+
+Status is kept for 30 days after a note settles, then the record is dropped.
 
 ---
 
@@ -734,6 +992,13 @@ At most 100 recipients per request. The stored local copy is timestamped by the 
 > **'recipients[].e2ee'**: Per-recipient flag. When 'true', the server packs 'aes_encrypted' and 'data_encrypted' into the SMTP wire blob and sends 'OPNTRN E2EE' to OPNTRN-capable receiving servers. When 'false', 'data_encrypted' is sent as a normal SMTP message. This allows mixed-mode sending: some recipients get E2EE delivery while others (on legacy servers with no key) get plaintext delivery - all in a single API call.
 >
 > Recipients with no OPNTRN key (returned as 'key_type: "none"' from '/email/publickeys') should be sent with 'e2ee: false'.
+>
+> **'ephemeral'** (optional): makes the message delete itself. Applied to recipients whose mailbox is on this server; other providers keep their own copy.
+> ```json
+> { "ephemeral": { "deletes_on_read": true } }
+> { "ephemeral": { "expires_in_seconds": 3600 } }
+> ```
+> 'expires_in_seconds' is clamped to 60 s - 90 days. If the rule cannot be recorded for a local recipient the delivery is rolled back and reported as 'success: false' — a message is never delivered under a promise the server cannot keep. See *Disappearing messages* above.
 
 **Response**: 'SendEncryptedResponse'
 ```json
@@ -845,3 +1110,60 @@ dkim:
 ```
 
 On startup, if 'private_key_path' is set and the file exists, the server loads the key and uses it to sign all outbound SMTP messages. If the key cannot be loaded, a warning is logged and outgoing mail is sent unsigned.
+
+### Disposable addresses (aliases)
+
+An alias is another address that delivers to one account: `shop-8f2k@<domain>`
+lands in the owner's mailbox, and switching it off makes senders bounce. Ten per
+account. The local part is 3–32 characters of lower-case letters, digits and
+hyphens.
+
+Mail is only accepted for an address Postfix has been told about, and Postfix
+asks `GET /admin/recipients` every few seconds — so a new alias starts working
+within about five seconds, and a switched-off one stops being accepted rather
+than being silently dropped.
+
+#### GET /aliases  (JWT)
+```json
+{
+  "aliases": [
+    { "local": "shop-8f2k", "address": "shop-8f2k@slothlee.xyz", "label": "Shopping",
+      "created_at": 1793158000, "disabled_at": null, "received": 4 }
+  ],
+  "limit": 10,
+  "domain": "slothlee.xyz"
+}
+```
+`received` counts messages delivered through the address.
+
+#### POST /aliases  (JWT)
+```json
+{ "local": "", "label": "Shopping" }
+```
+`local` empty generates a readable name (`quiet-otter-418`). A name is lower-cased
+before validation, so the response is the address actually created — always show
+that. `200 {"local": "...", "address": "..."}`; `400 invalid` for a name that
+cannot be used; `409 taken` when an account or another alias already answers to
+it; `409 too_many` at the limit.
+
+#### POST /aliases/disable  (JWT)
+```json
+{ "local": "shop-8f2k", "disabled": true }
+```
+`200 {"disabled": true}`. Switched off, the address is removed from the Postfix
+recipient map, so senders get a normal 550 rather than having their mail vanish.
+`404` when it is not the caller's.
+
+#### POST /aliases/delete  (JWT)
+```json
+{ "local": "shop-8f2k" }
+```
+`200 {"deleted": true}`, `404` when it is not the caller's. Mail already
+delivered stays in the mailbox.
+
+#### GET /admin/recipients  (admin JWT)
+```json
+{ "recipients": ["tibs", "shop-8f2k", "..."] }
+```
+Every local part that may receive mail: real accounts (pending signups excluded)
+plus switched-on aliases. Postfix's recipient map is built from this answer.
