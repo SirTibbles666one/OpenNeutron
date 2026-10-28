@@ -524,88 +524,169 @@ pub fn status(
 // ---- page rendering -------------------------------------------------------
 
 const PAGE_CSS: &str = r#"
-:root { color-scheme: dark; }
+/* The sealed note is the only page a stranger ever sees, and it was the last
+   place still wearing a different palette: neon mint on a green-black gradient,
+   nothing like the app it belongs to. These are the app's own values, written
+   out because this page ships without the stylesheet that declares them. */
+:root {
+  color-scheme: dark;
+  --ink-1: #e9eee0; --ink-2: #b6c2ab; --ink-3: #98a68e;
+  --line: #232b1d; --line-strong: #2f3927;
+  --card: #161c15; --field: #0e130d; --primary: #86bf6a; --sand: #c8a17a;
+  --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
 * { box-sizing: border-box; }
 body {
-  margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-  background: radial-gradient(circle at 50% 0%, #12261c 0%, #0a0f0c 55%, #060907 100%);
-  color: #e7f0ea; font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  padding: 20px;
+  margin: 0; min-height: 100dvh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 18px;
+  padding: 24px 18px calc(24px + env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, #131913 0%, #0d120c 62%, #0a0e0a 100%);
+  color: var(--ink-1); font: 15px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { width: 100%; max-width: 540px; }
+.brand {
+  display: flex; align-items: center; gap: 9px; padding: 0 2px 12px;
+}
+.brand .mark { width: 22px; height: 22px; flex: none; }
+.brand .name {
+  font: 550 11.5px/1 var(--sans); letter-spacing: .14em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.brand .tag {
+  margin-left: auto; font: 500 10.5px/1 var(--mono); letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-4);
 }
 .card {
-  width: 100%; max-width: 520px; background: rgba(18, 26, 21, .92);
-  border: 1px solid rgba(80, 220, 140, .18); border-radius: 18px;
-  padding: 26px 22px; box-shadow: 0 24px 60px rgba(0,0,0,.55);
+  background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+  padding: 26px 24px; box-shadow: 0 18px 50px rgba(0,0,0,.45);
 }
 .seal {
-  width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center;
-  background: rgba(80, 220, 140, .12); border: 1px solid rgba(80, 220, 140, .3);
-  margin-bottom: 16px; font-size: 22px;
+  width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center;
+  background: #1b2318; border: 1px solid var(--line-strong); margin-bottom: 18px;
+  color: var(--sand);
 }
-h1 { font-size: 19px; margin: 0 0 6px; letter-spacing: -.01em; }
-.sub { color: #9db3a6; font-size: 13px; margin: 0 0 18px; }
-.meta { font-size: 12.5px; color: #8fa79a; border-top: 1px solid rgba(255,255,255,.07); padding-top: 14px; margin-top: 18px; }
-.meta b { color: #cfe3d7; font-weight: 600; }
+.seal svg { width: 19px; height: 19px; }
+h1 {
+  font: 500 26px/1.22 var(--serif); letter-spacing: -.015em; margin: 0 0 8px;
+  color: var(--ink-1); text-wrap: balance;
+}
+.sub { color: var(--ink-3); font-size: 13.5px; margin: 0 0 20px; max-width: 44ch; }
+.label {
+  display: block; font: 550 11px/1 var(--sans); letter-spacing: .11em;
+  text-transform: uppercase; color: var(--ink-3); margin: 0 0 8px;
+}
 button {
-  width: 100%; padding: 14px 16px; font-size: 15px; font-weight: 650; color: #05130b;
-  background: linear-gradient(180deg, #56e29a, #2fbf7a); border: 0; border-radius: 12px;
+  width: 100%; min-height: 46px; padding: 12px 16px;
+  font: 600 14.5px/1.2 var(--sans); color: #0d1309;
+  background: var(--primary); border: 1px solid transparent; border-radius: 10px;
   cursor: pointer; transition: transform .12s ease, filter .12s ease;
 }
-button:hover { filter: brightness(1.06); }
-button:active { transform: scale(.985); }
-button:disabled { opacity: .6; cursor: default; }
-pre {
-  white-space: pre-wrap; word-break: break-all; background: #0b120e; border: 1px solid rgba(255,255,255,.08);
-  border-radius: 12px; padding: 14px; font-size: 11.5px; line-height: 1.45; color: #bfe6cd;
-  max-height: 46vh; overflow: auto; margin: 0 0 14px;
-}
-.warn { color: #f3c07b; font-size: 12.5px; margin: 12px 0 0; }
-.label { display: block; font-size: 12px; color: #9db3a6; margin: 0 0 6px; }
-input[type=password], input[type=text] {
-  width: 100%; padding: 13px 14px; font-size: 15px; color: #e7f0ea;
-  background: #0b120e; border: 1px solid rgba(255,255,255,.12); border-radius: 12px;
-  margin-bottom: 12px; outline: none;
-}
-input[type=password]:focus, input[type=text]:focus { border-color: rgba(80,220,140,.55); }
-.row { display: flex; gap: 10px; margin-bottom: 6px; }
-.row button { flex: 1; }
+button:hover { filter: brightness(1.05); }
+button:active { transform: scale(.99); }
+button:disabled { opacity: .55; cursor: default; }
 button.ghost {
-  background: transparent; color: #56e29a; border: 1px solid rgba(80,220,140,.35);
+  background: transparent; color: var(--ink-2);
+  border: 1px solid var(--line-strong);
 }
-.gone { color: #9db3a6; }
-a { color: #56e29a; }
+button.ghost:hover { background: #1b2318; color: var(--ink-1); }
+input[type=password], input[type=text] {
+  width: 100%; min-height: 46px; padding: 12px 14px;
+  font: 15px/1.2 var(--sans); color: var(--ink-1);
+  background: var(--field); border: 1px solid #27301f; border-radius: 10px;
+  margin-bottom: 12px; outline: none;
+  transition: border-color .12s ease;
+}
+input[type=password]:focus, input[type=text]:focus {
+  border-color: var(--primary); box-shadow: 0 0 0 3px rgba(134,191,106,.13);
+}
+.row { display: flex; gap: 10px; }
+.row button { flex: 1; }
+pre {
+  white-space: pre-wrap; word-break: break-all; margin: 0 0 14px;
+  background: var(--field); border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px; font: 11.5px/1.5 var(--mono); color: var(--ink-2);
+  max-height: 46vh; overflow: auto;
+}
+/* The note itself is the only long-form text on the page: serif, at a measure
+   a person can actually read. */
+.note {
+  font: 400 16.5px/1.68 var(--serif); color: var(--ink-1);
+  white-space: pre-wrap; word-break: break-word; margin: 0 0 4px;
+  max-height: 56vh; overflow: auto;
+}
+.meta {
+  font: 11px/1.5 var(--mono); letter-spacing: .04em; color: var(--ink-4);
+  border-top: 1px solid var(--line); padding-top: 13px; margin-top: 20px;
+}
+.meta b { color: var(--ink-2); font-weight: 500; }
+.warn { color: var(--sand); font-size: 12.5px; margin: 12px 0 0; }
+.err { color: #e0593f; font-size: 12.5px; margin: 12px 0 0; }
+.gone { color: var(--ink-3); }
+a { color: var(--primary); text-underline-offset: 2px; }
+.foot {
+  padding: 2px 2px 0; font: 11px/1.5 var(--mono); color: var(--ink-4);
+  text-align: center; letter-spacing: .03em;
+}
+/* Opening the note is the one moment on this page worth moving: the form gives
+   way and the text arrives, rather than the page blinking. */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+#out:not([hidden]), .card > .note { animation: rise .42s cubic-bezier(.2,.7,.2,1) both; }
+@media (prefers-reduced-motion: reduce) {
+  *, #out:not([hidden]) { animation: none !important; transition: none !important; }
+}
+@media (max-width: 420px) {
+  .card { padding: 22px 18px; border-radius: 14px; }
+  h1 { font-size: 22px; }
+  body { padding: 16px 12px 24px; justify-content: flex-start; }
+}
 "#;
+
+/// The mark, byte for byte the one the app draws (SlothMark.jsx), and the lock
+/// that sits above the headline. Both are inline: this page carries no assets.
+const MARK: &str = r##"<svg class="mark" viewBox="0 0 24 24" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="fur" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#c8a17a"/><stop offset="1" stop-color="#a97f57"/></linearGradient></defs><circle cx="12" cy="12" r="11" fill="url(#fur)"/><path d="M12 5.2c3.9 0 6.6 2.9 6.6 6.9 0 4.3-2.9 7-6.6 7s-6.6-2.7-6.6-7c0-4 2.7-6.9 6.6-6.9Z" fill="#f4ead6"/><ellipse cx="8.6" cy="10.9" rx="2.7" ry="2.3" fill="#5c4632" transform="rotate(-14 8.6 10.9)"/><ellipse cx="15.4" cy="10.9" rx="2.7" ry="2.3" fill="#5c4632" transform="rotate(14 15.4 10.9)"/><circle cx="9.1" cy="11.1" r="0.95" fill="#10120f"/><circle cx="14.9" cy="11.1" r="0.95" fill="#10120f"/><ellipse cx="12" cy="14.9" rx="1.6" ry="1.15" fill="#5c4632"/></svg>"##;
+
+const LOCK: &str = r##"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="9.5" rx="2.5"/><path d="M8 10.5V7.6a4 4 0 0 1 8 0v2.9"/></svg>"##;
 
 fn shell(title: &str, inner: &str) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\
          <meta name=\"robots\" content=\"noindex, nofollow\">\
-         <title>{}</title><style>{}</style></head><body><div class=\"card\">{}</div></body></html>",
+         <meta name=\"referrer\" content=\"no-referrer\">\
+         <meta name=\"theme-color\" content=\"#10150f\">\
+         <title>{}</title><style>{}</style></head><body>\
+         <div class=\"wrap\">\
+           <div class=\"brand\">{}<span class=\"name\">Sloth Lee</span>\
+             <span class=\"tag\">sealed note</span></div>\
+           <div class=\"card\">{}</div>\
+         </div></body></html>",
         escape(title),
         PAGE_CSS,
+        MARK,
         inner
     )
 }
 
 fn render_missing() -> String {
-    shell(
-        "No such note",
-        "<div class=\"seal\">🔒</div><h1>There is no note at this address</h1>\
-         <p class=\"sub gone\">The link may be mistyped, or the note may have been deleted after it was read.</p>",
-    )
+    let inner = format!(
+        r#"<div class="seal">{}</div><h1>There is no note at this address</h1><p class="sub gone">The link may be mistyped, or the note may have been deleted after it was read.</p>"#,
+        LOCK
+    );
+    shell("No such note", &inner)
 }
 
 fn render_gone(headline: &str, detail: &str) -> String {
-    shell(
-        headline,
-        &format!(
-            "<div class=\"seal\">🔒</div><h1>{}</h1><p class=\"sub gone\">{}</p>\
-             <div class=\"meta\">Nothing is stored on the server: the content was deleted when the note was closed.</div>",
-            escape(headline),
-            escape(detail)
-        ),
-    )
+    let inner = format!(
+        r#"<div class="seal">{}</div><h1>{}</h1><p class="sub gone">{}</p><div class="meta">Nothing is stored on the server: the content was deleted when the note was closed.</div>"#,
+        LOCK, escape(headline), escape(detail)
+    );
+    shell(headline, &inner)
 }
 
 /// Shared script: the open call, minus what each mode does with the armour.
@@ -660,6 +741,11 @@ btn.addEventListener('click', async () => {
 const PASS_JS: &str = r#"
 const btn = document.getElementById('reveal');
 const phrase = document.getElementById('phrase');
+// A button that refuses to work on an empty field is clearer than one that
+// answers "type the passphrase" after the click.
+const sync = () => { btn.disabled = (phrase.value || '').trim().length < 4; };
+phrase.addEventListener('input', sync);
+sync();
 btn.addEventListener('click', async () => {
   const pass = (phrase.value || '').trim();
   const msg = document.getElementById('msg');
@@ -749,7 +835,7 @@ fn render_sealed(subject: &str, from: &str, to: &str, expiry: &str, token: &str,
              <label class="label" for="phrase">Passphrase</label>
              <input id="phrase" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="The phrase the sender gave you">
              <button id="reveal">Read the note</button>
-             <p class="warn">The phrase is not in the email. Ask the sender for it if you do not have it.</p>
+             <p class="warn">The phrase travels separately from this email — ask the sender if you do not have it.</p>
            </div>"#
     } else {
         r#"<button id="reveal">Open the note</button>"#
@@ -757,22 +843,22 @@ fn render_sealed(subject: &str, from: &str, to: &str, expiry: &str, token: &str,
 
     let out = if mode == "passphrase" {
         r#"<div id="out" hidden>
-             <pre id="text"></pre>
+             <div id="text" class="note"></div>
              <div id="files"></div>
-             <p class="warn">Read it now — it has been deleted from the server.</p>
+             <p class="warn">Read it now, or download anything attached: this note has been deleted from the server.</p>
            </div>
-           <p class="warn" id="msg"></p>"#
+           <p class="err" id="msg"></p>"#
     } else {
         r#"<div id="out" hidden>
              <pre id="armor"></pre>
              <div class="row"><button id="copy">Copy</button><button id="save" class="ghost">Download .asc</button></div>
-             <p class="warn">This is OpenPGP armour for your key. Your mail client may open the .asc directly; otherwise <code>gpg --decrypt</code> does it.</p>
+             <p class="warn">OpenPGP armour for your key. Your mail client may open the .asc directly; otherwise <code>gpg --decrypt</code> does it.</p>
            </div>
-           <p class="warn" id="msg"></p>"#
+           <p class="err" id="msg"></p>"#
     };
 
     let lede = if mode == "passphrase" {
-        format!("A sealed note from <b>{}</b>, locked with a passphrase. This server cannot read it, and neither can any mail provider.", escape(from))
+        format!("A sealed note from <b>{}</b>, locked with a passphrase this server never sees.", escape(from))
     } else {
         format!("A sealed note from <b>{}</b>, encrypted to your key. This server cannot read it.", escape(from))
     };
@@ -784,7 +870,7 @@ fn render_sealed(subject: &str, from: &str, to: &str, expiry: &str, token: &str,
     };
 
     let inner = format!(
-        r#"<div class="seal">🔒</div>
+        r#"<div class="seal">{lock}</div>
            <h1>{subject}</h1>
            <p class="sub">{lede}</p>
            {form}
@@ -795,6 +881,7 @@ fn render_sealed(subject: &str, from: &str, to: &str, expiry: &str, token: &str,
            {out}
            {lib}
            <script>{script}</script>"#,
+        lock = LOCK,
         subject = escape(&subject_line),
         lede = lede,
         form = form,
