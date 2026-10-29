@@ -57,11 +57,23 @@ without a devtools session.
 **Server**
 ```bash
 tar czf - src Cargo.toml Cargo.lock | ssh -i <key> root@46.62.155.175 \
-  'tar xzf - -C /opt/on && docker exec openneutron \
-   cargo build --release --target x86_64-unknown-linux-musl && docker restart openneutron'
+  'tar xzf - -C /opt/on && docker exec -w /usr/src/app openneutron \
+   bash -lc "PATH=/usr/local/cargo/bin:\$PATH cargo build --release --locked \
+     --target x86_64-unknown-linux-musl" && docker restart openneutron'
 ```
 The binary is `OpenNeutron`, not `neutron`. A restart reloads sessions; users stay
 signed in.
+
+**`cargo` is not on the default PATH inside the container** — `bash -lc` alone answers
+`cargo: command not found`. Worse, piping the build through `tail` reports `tail`'s exit
+status, so a build that never ran printed "done" and the old binary kept serving. Always
+build without a pipe after the command, or with `set -o pipefail`, and confirm the
+binary's mtime changed before restarting.
+
+**`--locked` matters.** A new dependency means the lockfile changes, and the container
+cannot write `/usr/src/app/Cargo.lock` (the bind mount's ownership). Resolve the lock on
+the workstation (`cargo metadata`) and ship it; `--locked` then refuses to build if the
+two disagree, which is the failure you want instead of a silent half-build.
 
 **Prove it after deploying**
 ```bash
