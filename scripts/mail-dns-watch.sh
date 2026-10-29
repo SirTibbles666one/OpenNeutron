@@ -31,7 +31,14 @@ check() { # name expected actual
 check "nameservers" "memphis.ns.cloudflare.com.
 tori.ns.cloudflare.com." "$(q slothlee.xyz NS | sed 's/\.$//;s/$/./' | sort -u)"
 
-check "apex A" "34.147.215.88" "$(q slothlee.xyz A | tr '\n' ' ' | sed 's/ $//')"
+# The apex is proxied through Cloudflare, so its A record is an edge address that
+# changes by design. Check that it resolves, and that the origin behind it still
+# answers when asked directly.
+apex_ips="$(q slothlee.xyz A | tr '\n' ' ' | sed 's/ $//')"
+[ -n "$apex_ips" ] || problems+=("apex does not resolve at all")
+origin_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+    --resolve slothlee.xyz:443:34.147.215.88 https://slothlee.xyz/ 2>/dev/null)
+[ "$origin_code" = "200" ] || problems+=("origin behind the apex answered $origin_code, not 200")
 check "mail A" "46.62.155.175" "$(q mail.slothlee.xyz A)"
 check "mail AAAA" "2a01:4f9:c013:dab1::1" "$(q mail.slothlee.xyz AAAA)"
 check "MX" "10 mail.slothlee.xyz." "$(q slothlee.xyz MX)"
