@@ -20,6 +20,15 @@ paths named below.
 | certbot | host, timer | Let's Encrypt renewal | `systemctl list-timers \| grep certbot` |
 | `data/geoip.mmdb` | file, read by the container | Country for each signed-in session (DB-IP Lite, CC BY 4.0) | `ls -l /opt/on/data/geoip.mmdb` |
 
+**Security keys live in `data/webauthn.json`.** Public keys and signature counters only —
+no shared secrets, unlike `twofactor.json`, so a copy of the file cannot sign anyone in.
+It is in the off-site backup tar list; a restore without it makes every enrolled key
+unusable (TOTP and recovery codes still work). Login challenges are held in memory for
+five minutes and deleted when redeemed, so a restart mid-login means starting again —
+that is intentional: an assertion over an old challenge is still a valid signature.
+WebAuthn requires the site to be a secure context, so it works on
+`https://mail.slothlee.xyz` and not through a frame or a preview URL.
+
 **Outbound mail must be DKIM-signed at the MTA, not only by the app.** The app signs what
 it sends itself, but anything submitted locally — cron output, scripts, the DNS watchdog —
 goes through Postfix and rspamd. `rspamd` was logging
