@@ -87,6 +87,22 @@ binary (rebuild from git — a backup that pinned a build would restore last mon
 with this month's data), TLS certificates (re-issue once DNS points at the new host), and
 the `/usr/src/app` layout the image expects.
 
+## Monitoring
+
+A watchdog runs **every 30 minutes from the Hermes host**, not from this server —
+deliberately, because a machine cannot report its own absence. `mail-watchdog.sh`
+(script-only, no model invoked) SSHes in, runs `mail-health.sh`, and **prints nothing
+when the check passes**. Silence means healthy; the only messages are the failures:
+
+- **not answering over SSH** — the host is down, unreachable, or refusing the key
+- **health check failed** — with the lines `mail-health.sh` printed
+
+Alerts arrive in Telegram. They cover the container, the API, nginx, postfix, rspamd,
+redis, fail2ban, https, certificate expiry under 14 days, the SMTP listeners, the
+postfix queue, the age of the last off-site backup (over 26 h) and disk over 85%.
+
+This is a backstop, not a substitute for `mail-health.sh -v` when something feels wrong.
+
 ## Where the secrets are
 
 | Secret | Path |
