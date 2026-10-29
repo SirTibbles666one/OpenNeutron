@@ -20,6 +20,20 @@ paths named below.
 | certbot | host, timer | Let's Encrypt renewal | `systemctl list-timers \| grep certbot` |
 | `data/geoip.mmdb` | file, read by the container | Country for each signed-in session (DB-IP Lite, CC BY 4.0) | `ls -l /opt/on/data/geoip.mmdb` |
 
+**Every scheduled job that matters now says when it fails.** Five run: the nightly
+off-site backup, the monthly restore drill, the monthly GeoIP refresh, the half-hourly DNS
+watchdog (which mails on its own) and the weekly outbound DANE check. Each failure path
+ends in `| /usr/local/bin/mail-alert.sh "<subject>"`, which uses `/usr/sbin/sendmail` —
+there is no `mail` binary on this host, and an alert that silently fails is not an alert.
+Before this, only the DANE check could tell anyone anything: a backup that stopped in
+August looked exactly like one that ran last night.
+
+**The restore drill has been proved, not just scheduled.** It downloaded the newest
+archive (sha256 matched the upload log), decrypted it, extracted 397 members, booted a
+second server on port 8099 from the restored state and read its user table back — 8
+accounts, DKIM key recovered. A bogus archive name makes it exit 1 and mail the failure,
+so the drill can fail rather than always passing.
+
 **Outbound DANE is on, and it depends on one service staying up.** `unbound` runs as a
 validating resolver on `127.0.0.1:53`; `systemd-resolved` points at it
 (`/etc/systemd/resolved.conf.d/dane.conf`), so Postfix sees the AD bit without
