@@ -20,6 +20,14 @@ paths named below.
 | certbot | host, timer | Let's Encrypt renewal | `systemctl list-timers \| grep certbot` |
 | `data/geoip.mmdb` | file, read by the container | Country for each signed-in session (DB-IP Lite, CC BY 4.0) | `ls -l /opt/on/data/geoip.mmdb` |
 
+**DANE pins the mail certificate, and renewal must keep the key.** `reuse_key = True` is set
+in `/etc/letsencrypt/renewal/mail.slothlee.xyz.conf`, so the SPKI pin published in DNS stays
+correct across renewals without the deploy hook needing a token. Two traps: `reuse_key` must
+sit inside `[renewalparams]` — appending it to the end of the file puts it in `[[webroot_map]]`
+and certbot reads the value as a webroot path (`True/.well-known`), which fails the renewal
+silently until someone runs a dry run. And a dry run is the only way to know: it passed only
+after the setting was moved, and a failed renewal in January would have taken TLS down with it.
+
 **Security keys live in `data/webauthn.json`.** Public keys and signature counters only —
 no shared secrets, unlike `twofactor.json`, so a copy of the file cannot sign anyone in.
 It is in the off-site backup tar list; a restore without it makes every enrolled key
