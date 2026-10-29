@@ -48,8 +48,15 @@ fn lock() -> &'static Mutex<()> {
 pub struct StoredKey {
     pub public_key: String,
     pub encrypted_private_key: String,
+    /// Base64 of the PBKDF2 salt. Stored with the ciphertext because a wrapped key
+    /// without its salt cannot be unwrapped — the two are one artefact.
+    pub salt: String,
     pub fingerprint: String,
     pub kdf: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub email: String,
     pub updated_at: String,
 }
 
@@ -57,7 +64,12 @@ pub struct StoredKey {
 pub struct PutKeyRequest {
     pub public_key: String,
     pub encrypted_private_key: String,
+    pub salt: String,
     pub fingerprint: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub email: String,
     /// Describes how the private key was wrapped, e.g. `pbkdf2-sha256:310000:aes-256-gcm`.
     /// Recorded so a future client knows what it is looking at.
     pub kdf: String,
@@ -132,6 +144,9 @@ pub fn get_key(
             "exists": true,
             "public_key": key.public_key,
             "encrypted_private_key": key.encrypted_private_key,
+            "salt": key.salt,
+            "name": key.name,
+            "email": key.email,
             "fingerprint": key.fingerprint,
             "kdf": key.kdf,
             "updated_at": key.updated_at,
@@ -172,6 +187,11 @@ pub fn put_key(
     if body.encrypted_private_key.trim().is_empty() {
         return fail("missing_private_key", "The encrypted private key is empty", 400);
     }
+    // The salt travels with the ciphertext; without it the key is unrecoverable.
+    match base64::engine::general_purpose::STANDARD.decode(body.salt.as_bytes()) {
+        Ok(bytes) if bytes.len() >= 16 => {}
+        _ => return fail("bad_salt", "The salt must be at least 16 bytes, base64", 400),
+    }
     if body.encrypted_private_key.len() > MAX_FIELD_BYTES || body.public_key.len() > MAX_FIELD_BYTES {
         return fail("too_large", "That key is larger than this endpoint accepts", 413);
     }
@@ -196,8 +216,11 @@ pub fn put_key(
     store.insert(user.username.clone(), StoredKey {
         public_key: body.public_key,
         encrypted_private_key: body.encrypted_private_key,
+        salt: body.salt,
         fingerprint: body.fingerprint.to_uppercase().replace(' ', ""),
         kdf: body.kdf,
+        name: body.name,
+        email: body.email,
         updated_at: now_utc(),
     });
     match save_store(&store) {
@@ -264,7 +287,10 @@ mod tests {
         let key = StoredKey {
             public_key: "-----BEGIN PGP PUBLIC KEY BLOCK-----\nx\n-----END PGP PUBLIC KEY BLOCK-----".into(),
             encrypted_private_key: "AAAA".into(),
+            salt: "AAAAAAAAAAAAAAAAAAAAAA==".into(),
             fingerprint: "A1B2".into(),
+            name: "Tibs".into(),
+            email: "tibs@slothlee.xyz".into(),
             kdf: "pbkdf2-sha256:310000:aes-256-gcm".into(),
             updated_at: now_utc(),
         };
