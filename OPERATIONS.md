@@ -20,6 +20,24 @@ paths named below.
 | certbot | host, timer | Let's Encrypt renewal | `systemctl list-timers \| grep certbot` |
 | `data/geoip.mmdb` | file, read by the container | Country for each signed-in session (DB-IP Lite, CC BY 4.0) | `ls -l /opt/on/data/geoip.mmdb` |
 
+**Outbound DANE is on, and it depends on one service staying up.** `unbound` runs as a
+validating resolver on `127.0.0.1:53`; `systemd-resolved` points at it
+(`/etc/systemd/resolved.conf.d/dane.conf`), so Postfix sees the AD bit without
+`/etc/resolv.conf` changing — Docker reads that file when it builds a container's
+resolver, and `127.0.0.1` there would point at the container itself. Postfix runs
+`smtp_dns_support_level = dnssec`, `smtp_tls_security_level = dane`, so a domain that
+publishes TLSA must present a matching certificate or delivery is deferred. If unbound
+stops, every lookup loses the AD bit and DANE silently degrades to ordinary opportunistic
+TLS — mail still flows, so nothing looks wrong. `mail-dane-outbound-check.sh` (cron
+Mondays 05:23) is what notices, and it is proven to fail: stopping unbound turns it red.
+
+**The apex is proxied, the mail records are not.** `slothlee.xyz` and `www` are proxied so
+Cloudflare can add HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy and
+Permissions-Policy that the Northflank origin does not send; SSL mode is Full (strict) so
+the origin certificate is still verified. No CSP is injected there on purpose — the origin
+is a Next.js app and a wrong policy breaks it silently. SMTP, MTA-STS and the mail host
+stay DNS-only: proxying them breaks mail.
+
 **DANE pins the mail certificate, and renewal must keep the key.** `reuse_key = True` is set
 in `/etc/letsencrypt/renewal/mail.slothlee.xyz.conf`, so the SPKI pin published in DNS stays
 correct across renewals without the deploy hook needing a token. Two traps: `reuse_key` must
