@@ -30,3 +30,4 @@ pub mod notes;
 pub mod push;
 pub mod mailboxlog;
 pub mod pqkeys;
+pub mod geoip;

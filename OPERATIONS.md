@@ -18,6 +18,14 @@ paths named below.
 | nginx | host, **:443** | Web client, `mta-sts` and `wkd` vhosts | `systemctl status nginx` |
 | fail2ban | host | `sshd` + `nginx-limit-req` jails | `fail2ban-client status` |
 | certbot | host, timer | Let's Encrypt renewal | `systemctl list-timers \| grep certbot` |
+| `data/geoip.mmdb` | file, read by the container | Country for each signed-in session (DB-IP Lite, CC BY 4.0) | `ls -l /opt/on/data/geoip.mmdb` |
+
+**Country lookup is local.** The session list labels each signed-in device with the
+country its address is registered in. The lookup reads `data/geoip.mmdb` in-process: no
+address is sent to a third party to answer "where is this signed in from". Refresh the
+file monthly with `mail-geoip-update.sh` (cron `17 4 3 * *`, source in `scripts/`); it
+installs atomically and refuses a download under 1 MB. **A missing database is not an
+error** — the rows simply carry no country, because that is the truth.
 
 **One health command:** `mail-health.sh` — silent and exit 0 when everything is fine,
 prints only what is wrong and exits 1 otherwise. `mail-health.sh -v` shows every check.

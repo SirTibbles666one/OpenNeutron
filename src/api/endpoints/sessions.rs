@@ -55,6 +55,10 @@ pub fn list(request: &mut Request, user: Option<User>, _us: Arc<UserStorage>, _e
                 "current": current.as_deref() == Some(id.as_str()),
                 "user_agent": record.user_agent,
                 "ip": record.ip,
+                // The country, not the city: a session list needs to answer "is this
+                // somewhere I have been", and a city is both less reliable and more
+                // than the question needs.
+                "country": crate::core::geoip::country(&record.ip),
                 "created_at": record.created_at,
                 "last_seen_at": record.last_seen_at,
             })
