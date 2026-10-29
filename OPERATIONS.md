@@ -54,10 +54,11 @@ signed in.
 ./scripts/run-all-proofs.sh              # everything
 ./scripts/run-all-proofs.sh --only scheduled
 ```
-Fourteen proofs: the Rust tests, four browser-crypto proofs in Node, and nine Python
-proofs that run against the box over SSH. Each line is one proof; the runner exits
+The suite is the Rust tests, the browser-crypto proofs (Node), and the Python proofs
+that run against the box over SSH. Each line of output is one proof; the runner exits
 non-zero if any fails, **judged by the proof's exit status**, never by matching its
-output — that mistake once let a 29/30 run report `ok`.
+output — that mistake once let a 29/30 run report `ok`. No count is written here on
+purpose: it changed twice this week, and a number in prose is a claim that rots.
 
 ## Backups and restore
 
