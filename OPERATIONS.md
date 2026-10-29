@@ -20,6 +20,20 @@ paths named below.
 | certbot | host, timer | Let's Encrypt renewal | `systemctl list-timers \| grep certbot` |
 | `data/geoip.mmdb` | file, read by the container | Country for each signed-in session (DB-IP Lite, CC BY 4.0) | `ls -l /opt/on/data/geoip.mmdb` |
 
+**Outbound mail must be DKIM-signed at the MTA, not only by the app.** The app signs what
+it sends itself, but anything submitted locally — cron output, scripts, the DNS watchdog —
+goes through Postfix and rspamd. `rspamd` was logging
+`cannot load dkim key /var/lib/rspamd/dkim/slothlee.xyz.dkim.key` and signing nothing, so
+those messages left unsigned while DMARC said `p=reject`. Fixed by
+`/etc/rspamd/local.d/dkim_signing.conf` pointing at `/opt/on/dkim/slothlee.xyz.pem`,
+selector `mail`, group-readable by `_rspamd`.
+
+**A `local.d` file must not repeat its section name.** Writing
+`dkim_signing { ... }` inside `local.d/dkim_signing.conf` nests it as
+`dkim_signing.dkim_signing`, which rspamd accepts with `syntax OK` and then ignores
+entirely — the log keeps showing the old behaviour. Check with
+`rspamadm configdump dkim_signing` before believing a config took effect.
+
 **Country lookup is local.** The session list labels each signed-in device with the
 country its address is registered in. The lookup reads `data/geoip.mmdb` in-process: no
 address is sent to a third party to answer "where is this signed in from". Refresh the
