@@ -44,6 +44,11 @@ def call(method, path, body=None, token=None, expect=None):
     return status, payload
 
 
+def admin_usernames():
+    status, body = call("GET", "/api/admin/users", None, admin_token)
+    return [u.get("username", "") for u in body.get("users", [])] if status == 200 else []
+
+
 def check(name, condition, detail=""):
     results.append((name, bool(condition), detail))
     print(("PASS  " if condition else "FAIL  ") + name + (f"   [{detail}]" if detail else ""))
@@ -143,7 +148,7 @@ status, body = login(acct_a)
 check("E2 the approved account can sign in", status == 200, str(status))
 check("E3 and gets a real session token", bool(body.get("token")), str(bool(body.get("token"))))
 status, body = call("GET", "/api/admin/pending", token=admin_token, expect=200)
-check("E4 the queue is now empty",
+check("E4 the approved account has left the queue",
       acct_a not in [e.get("username") for e in body.get("entries", [])], str(body))
 status, _ = call("POST", "/api/admin/pending/approve", {"username": acct_a}, token=admin_token)
 check("E5 approving twice is refused with not_pending",
@@ -214,6 +219,39 @@ for _ in range(9):
 check("K1 the sign-in endpoint throttles with 429, not 503",
       429 in codes and 503 not in codes, str(sorted(set(codes))))
 check("K2 and refuses the extra attempts", codes.count(429) >= 1, str(codes))
+
+# ── Cleanup ────────────────────────────────────────────────────────────────
+# This proof registers accounts on purpose, so it has to remove them or every run
+# leaves the admin list littered with phase1* names that look like a leak.
+for suffix in ("a", "b", "c", "e", "f", "g"):
+    name = f"phase1{suffix}{stamp}"
+    try:
+        # Requests that were never approved sit in the queue, not in the user table,
+        # so deleting the account alone leaves the queue dirty for the next run.
+        call("POST", "/api/admin/pending/deny", {"username": name}, token=admin_token)
+    except Exception:
+        pass
+    try:
+        call("DELETE", "/api/admin/users", {"username": name}, admin_token)
+    except Exception:
+        pass
+
+# Anything a previous run left behind is not this run's failure to report, but it is
+# litter: clear it so the queue describes the present, not the history of the suite.
+_litter = {e.get("username", "") for e in call("GET", "/api/admin/pending", token=admin_token)[1].get("entries", [])}
+_litter |= {u for u in admin_usernames() if u.startswith("phase1")}
+for name in sorted(_litter):
+    if name.startswith("phase1"):
+        try:
+            call("POST", "/api/admin/pending/deny", {"username": name}, token=admin_token)
+        except Exception:
+            pass
+        try:
+            call("DELETE", "/api/admin/users", {"username": name}, admin_token)
+        except Exception:
+            pass
+left = [u for u in admin_usernames() if u.startswith("phase1")]
+check("cleanup left no phase1 accounts behind", not left, str(left))
 
 print()
 passed = sum(1 for _, ok, _ in results if ok)
