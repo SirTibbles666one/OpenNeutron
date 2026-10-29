@@ -230,6 +230,18 @@ def main():
     check("a stranger cannot edit it",
           status == 409 and res.get("code") == "not_editable", f"{status} {res}")
 
+    # The dangerous case: an edit with no time would fall through to the normal send
+    # path and deliver a second copy while the first stayed queued.
+    no_time = {k: v for k, v in edited.items() if k != "send_at"}
+    status, res = call("POST", "/email/sendencrypted", no_time, tok)
+    check("an edit without a time is refused",
+          status == 400 and res.get("code") == "replace_needs_time", f"{status} {res}")
+    check("and nothing extra was queued",
+          len([r for r in scheduled_rows(tok) if r["status"] == "pending"]) == rows_before,
+          "pending count moved")
+    check("and the held message is untouched",
+          {r["id"]: r for r in scheduled_rows(tok)}.get(edit_id, {}).get("subject") == new_subject)
+
     check("a time in the past is still refused when editing",
           call("POST", "/email/sendencrypted", {**held_request(new_subject, now - 60), "replace_id": edit_id}, tok)[0] == 400)
 

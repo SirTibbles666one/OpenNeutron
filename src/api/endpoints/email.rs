@@ -807,6 +807,19 @@ pub fn send_encrypted(
         Err(resp) => return resp,
     };
 
+    // An edit must name a time. Without one this would fall through to the normal
+    // send path and deliver a *second* copy while the held one stayed queued — the
+    // worst possible outcome, because the sender thinks they corrected it once.
+    let editing = req.replace_id.as_deref().map(str::trim).filter(|id| !id.is_empty());
+    if editing.is_some() && req.send_at.filter(|at| *at > 0).is_none() {
+        let err = serde_json::to_vec(&ErrorResponse {
+            error: "An edited message still needs a time — it is still held".into(),
+            code: "replace_needs_time".into(),
+        })
+        .unwrap();
+        return Response::from_data(err).with_status_code(400).with_header(json_header());
+    }
+
     // Held for later: store the request as it arrived and let the sweeper replay
     // it through this same endpoint, so a scheduled message is encrypted, saved
     // and delivered by exactly the code that sends one now.
@@ -835,11 +848,7 @@ pub fn send_encrypted(
             }
         };
         let to: Vec<String> = req.recipients.keys().cloned().collect();
-        let replacing = req
-            .replace_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|id| !id.is_empty());
+        let replacing = editing;
 
         let queued = match replacing {
             Some(id) => crate::core::scheduled::reschedule(
