@@ -33,12 +33,18 @@ the server except configuration.
 
 **Web client**
 ```bash
-cd <web-repo> && npm run build
-tar czf - -C dist . | ssh -i <key> root@46.62.155.175 \
-  'rm -rf /opt/on/data/static/* && tar xzf - -C /opt/on/data/static && chmod 755 /opt/on/data'
+cd <web-repo> && ./scripts/deploy.sh
 ```
+That script builds, refuses to upload if the entry point or the build stamp is missing,
+uploads, and then checks the served asset is byte-identical to the build (sha256). Use it
+rather than the three-line pipeline: `npm run build | tail -2 && tar czf - ... | ssh ...`
+takes its exit status from `tail`, so a failed build uploads the *previous* dist and the
+result is indistinguishable from a browser cache problem.
+
 Bump the service-worker version in `public/sw.js` before building, or browsers keep the
-old shell and a fix looks like it did nothing.
+old shell and a fix looks like it did nothing. The sidebar footer shows the running build
+(`<sha>[+] · <innerWidth>x<innerHeight>`), which answers "is my phone on the new build?"
+without a devtools session.
 
 **Server**
 ```bash
