@@ -81,6 +81,13 @@ if ! /usr/local/bin/mail-dane-check.sh >/tmp/dane.$$ 2>&1; then
 fi
 rm -f /tmp/dane.$$
 
+# --- Web Key Directory ---
+# openpgpkey.<domain> is its own hostname. It was once missing from DNS, which made every
+# client's key lookup fail with a bare network error and looked like a crypto bug.
+wkd_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+    https://openpgpkey.slothlee.xyz/health 2>/dev/null || echo 000)
+[ "$wkd_code" = "200" ] || problems+=("Web Key Directory host answered $wkd_code, not 200 - clients cannot fetch keys")
+
 # --- report ---
 if [ ${#problems[@]} -eq 0 ]; then
     log "ok"
