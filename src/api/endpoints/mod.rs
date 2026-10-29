@@ -11,6 +11,7 @@ pub mod email;
 pub mod group;
 pub mod waitlist;
 pub mod pgp;
+pub mod pgpkey;
 pub mod notes;
 pub mod import;
 pub mod log;

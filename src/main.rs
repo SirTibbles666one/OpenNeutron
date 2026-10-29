@@ -456,6 +456,9 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Post,      "/api/user/key",              Authenticated,  endpoints::user::get_own_key);
     router.add_route(Method::Post,      "/api/pgp/wkd/publish",     Authenticated,  endpoints::pgp::publish_wkd);
     router.add_route(Method::Get,       "/api/pgp/wkd/status",      Authenticated,  endpoints::pgp::wkd_status);
+    router.add_route(Method::Get,       "/api/user/pgpkey",         Authenticated,  endpoints::pgpkey::get_key);
+    router.add_route(Method::Put,       "/api/user/pgpkey",         Authenticated,  endpoints::pgpkey::put_key);
+    router.add_route(Method::Delete,    "/api/user/pgpkey",         Authenticated,  endpoints::pgpkey::delete_key);
     router.add_route(Method::Get,       "/api/me",                  Authenticated, endpoints::user::get_me);
     // Sealed notes, from the sender's side.
     router.add_route(Method::Post,      "/api/note/create",         Authenticated, endpoints::notes::create);
