@@ -234,6 +234,7 @@ pub fn login_with_code(
         encrypted_private_key: user.encrypted_private_key.clone(),
         two_factor_required: false,
         challenge: None,
+        two_factor_methods: Vec::new(),
         session_id: Some(session_id),
     }).unwrap())
 }

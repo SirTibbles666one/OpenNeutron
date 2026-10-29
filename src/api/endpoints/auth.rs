@@ -83,6 +83,20 @@ pub fn login(
                 two_factor_required: result.two_factor_required,
                 challenge: result.challenge,
                 session_id: result.session_id,
+                two_factor_methods: {
+                    // Only the factors this account can actually satisfy: offering a
+                    // button that cannot work is how people conclude the key is broken.
+                    let mut methods = Vec::new();
+                    if result.two_factor_required {
+                        if crate::core::twofactor::is_enabled(&username) {
+                            methods.push("totp".to_string());
+                        }
+                        if crate::core::webauthn::has_any(&username) {
+                            methods.push("webauthn".to_string());
+                        }
+                    }
+                    methods
+                },
             }).unwrap();
             Response::from_data(body).with_status_code(200).with_header(json_header())
         }

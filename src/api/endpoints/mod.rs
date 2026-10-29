@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod user;
 pub mod twofactor;
+pub mod webauthn;
 pub mod sessions;
 pub mod admin;
 pub mod aliases;

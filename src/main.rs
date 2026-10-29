@@ -417,6 +417,12 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     // Unauthenticated.
     router.add_route(Method::Post, "/api/auth/login",     Open, endpoints::auth::login);
     router.add_route(Method::Post, "/api/auth/login/2fa", Open, endpoints::twofactor::login_with_code);
+    router.add_route(Method::Post, "/api/auth/login/webauthn/begin", Open, endpoints::webauthn::login_begin);
+    router.add_route(Method::Post, "/api/auth/login/webauthn/finish", Open, endpoints::webauthn::login_finish);
+    router.add_route(Method::Get,  "/api/user/webauthn", Authenticated, endpoints::webauthn::list);
+    router.add_route(Method::Post, "/api/user/webauthn/register/begin", Authenticated, endpoints::webauthn::register_begin);
+    router.add_route(Method::Post, "/api/user/webauthn/register/finish", Authenticated, endpoints::webauthn::register_finish);
+    router.add_route(Method::Post, "/api/user/webauthn/remove", Authenticated, endpoints::webauthn::remove);
     router.add_route(Method::Get,  "/api/signup/challenge", Open, endpoints::user::signup_challenge);
     router.add_route(Method::Post, "/api/user/register",  Open, endpoints::user::register);
     router.add_route(Method::Post, "/api/user/delete-account", Authenticated, endpoints::user::delete_own_account);

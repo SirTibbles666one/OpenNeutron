@@ -83,8 +83,10 @@ pub fn authenticate_with_client(
     }
 
     // Second factor: the password alone must not yield a session, and it must
-    // not leak key material, the salt or admin status either.
-    if crate::core::twofactor::is_enabled(username) {
+    // not leak key material, the salt or admin status either. A registered
+    // security key counts on its own, so enrolling one cannot quietly weaken
+    // anything if TOTP is later switched off.
+    if crate::core::twofactor::is_enabled(username) || crate::core::webauthn::has_any(username) {
         let challenge = generate_challenge_jwt(username)
             .map_err(|e| AuthError::new(500, "token_error", &e.to_string()))?;
         log::info!("[Auth] '{}' passed the password step; second factor required", username);

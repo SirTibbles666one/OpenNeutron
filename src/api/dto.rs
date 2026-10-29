@@ -57,6 +57,9 @@ pub struct LoginResponse {
     pub two_factor_required: bool,
     #[serde(default)]
     pub challenge: Option<String>,
+    /// Which second factors this account can satisfy: "totp", "webauthn".
+    #[serde(default)]
+    pub two_factor_methods: Vec<String>,
     /// Id of the session this token belongs to.
     #[serde(default)]
     pub session_id: Option<String>,
