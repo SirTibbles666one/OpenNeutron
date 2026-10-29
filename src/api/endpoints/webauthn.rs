@@ -133,6 +133,9 @@ pub fn list(request: &mut Request, user: Option<User>, _u: Arc<UserStorage>, _e:
         "keys": keys,
         "max": webauthn::MAX_KEYS_PER_USER,
         "rp_id": RP_ID,
+        // An account without an authenticator app has no code to give, and asking
+        // for one would make the screen unusable rather than safer.
+        "code_required": twofactor::is_enabled(&user.username),
     }))
 }
 
