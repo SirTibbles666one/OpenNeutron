@@ -88,6 +88,18 @@ wkd_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
     https://openpgpkey.slothlee.xyz/health 2>/dev/null || echo 000)
 [ "$wkd_code" = "200" ] || problems+=("Web Key Directory host answered $wkd_code, not 200 - clients cannot fetch keys")
 
+# --- this host must be able to resolve names at all ---
+# The systemd-resolved stub failed silently once: unbound answered correctly, every
+# getaddrinfo() on the box did not, and nothing here noticed because every other leg
+# speaks DNS directly instead of using the OS.
+for name in mail.slothlee.xyz app.slothlee.xyz; do
+    getent hosts "$name" >/dev/null 2>&1 || problems+=("this host cannot resolve $name")
+done
+
+# --- the bot site answer ---
+code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 15 https://app.slothlee.xyz/ 2>/dev/null || echo 000)
+[ "$code" = "200" ] || problems+=("app.slothlee.xyz answered $code")
+
 # --- report ---
 if [ ${#problems[@]} -eq 0 ]; then
     log "ok"
