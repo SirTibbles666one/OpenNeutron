@@ -54,12 +54,21 @@ db_has_data() {
   [ "${n:-0}" -ge 1 ]
 }
 
+# Name resolution is a dependency nothing else here names. When the host resolver
+# died, every container looked broken at once and the cause was invisible: the
+# bot crash-looped on `getaddrinfo EAI_AGAIN` while unbound itself answered fine.
+# Checking it directly turns "the bot is down" into "DNS is down".
+dns_resolves() { # hostname
+  getent hosts "$1" 2>/dev/null | head -1 | grep -q .
+}
+
 host_answers() { # url, expected status
   local code
   code=$(curl -sS -m 12 -o /dev/null -w '%{http_code}' -A 'sloth-watch/1.0' "$1" 2>/dev/null)
   [ "$code" = "$2" ]
 }
 
+check "host can resolve DNS"      dns_resolves discord.com
 check "bot container"            container_ok sloth-bot
 check "postgres container"       container_ok sloth-pg
 check "database accepts queries" db_answers
