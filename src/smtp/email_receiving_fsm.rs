@@ -37,25 +37,47 @@ enum EmailReceivingState {
 pub struct EmailReceivingFSM {
     state: EmailReceivingState,
     email: ReceivedEmail,
+    /// The mail domain this server is authoritative for; used to decide whether a
+    /// recipient is local.
     server_name: String,
+    /// The name announced in the EHLO response, which must match the reverse DNS
+    /// record rather than the bare mail domain.
+    ehlo_name: String,
     user_storage: Arc<UserStorage>,
     is_e2ee: bool,
     /// True once the connection has been upgraded to TLS via STARTTLS.
     is_tls: bool,
     remote: String,
+    /// Refuse a sender claiming our own domain without a DKIM pass.
+    reject_spoof: bool,
+    /// Refuse a recipient that is not a real mailbox here.
+    reject_unknown: bool,
+    /// Set when the message was refused, so the caller does not deliver it.
+    rejected: bool,
 }
 
 
 impl EmailReceivingFSM {
-    pub fn new(server_name: &str, user_storage: Arc<UserStorage>, remote: String) -> Self {
+    pub fn new(
+        server_name: &str,
+        ehlo_name: &str,
+        user_storage: Arc<UserStorage>,
+        remote: String,
+        reject_spoof: bool,
+        reject_unknown: bool,
+    ) -> Self {
         EmailReceivingFSM {
             state: EmailReceivingState::WaitingForEhlo,
             email: ReceivedEmail::new(),
             server_name: server_name.to_string(),
+            ehlo_name: ehlo_name.to_string(),
             user_storage,
             is_e2ee: false,
             is_tls: false,
             remote,
+            reject_spoof,
+            reject_unknown,
+            rejected: false,
         }
     }
 
@@ -98,9 +120,7 @@ impl EmailReceivingFSM {
                     }
                     // SMTP transparency (RFC 5321 s.4.5.2): remove dot-stuffing
                     self.email.raw_data = smtp_dot_unstuff(&self.email.raw_data);
-                    self.state = EmailReceivingState::WaitingForQuit;
-                    stream.write_all(b"250 2.0.0 OK\r\n")?;
-                    stream.flush()?;
+                    self.finish_data(stream)?;
                     log::debug!("[SMTP {}] DATA complete - {} bytes received", self.remote, self.email.raw_data.len());
                 } else {
                     self.email.raw_data.extend_from_slice(chunk);
@@ -266,11 +286,11 @@ impl EmailReceivingFSM {
                     remaining -= n;
                 }
 
-                stream.write_all(b"250 2.0.0 OK\r\n")?;
-                stream.flush()?;
-
                 if is_last {
-                    self.state = EmailReceivingState::WaitingForQuit;
+                    self.finish_data(stream)?;
+                } else {
+                    stream.write_all(b"250 2.0.0 OK\r\n")?;
+                    stream.flush()?;
                 }
                 continue;
             }
@@ -282,7 +302,7 @@ impl EmailReceivingFSM {
                         log::debug!("[SMTP {}] {}", self.remote, line_str.trim());
                         self.state = EmailReceivingState::WaitingForMailFrom;
                         let mut response = String::new();
-                        response.push_str(&format!("250-{}\r\n", self.server_name));
+                        response.push_str(&format!("250-{}\r\n", self.ehlo_name));
                         response.push_str("250-PIPELINING\r\n");
                         response.push_str("250-SIZE 104857600\r\n");
                         // Do not advertise STARTTLS on an already-encrypted connection (RFC 3207).
@@ -360,12 +380,19 @@ impl EmailReceivingFSM {
 
     pub fn parse_body(&mut self) {
         // Find the header/body separator in raw bytes - works for both text and binary emails
-        let sep_pos = self.email.raw_data.windows(4).position(|w| w == b"\r\n\r\n");
+        let mut sep_len = 4usize;
+        let mut sep_pos = self.email.raw_data.windows(4).position(|w| w == b"\r\n\r\n");
+        if sep_pos.is_none() {
+            // Some clients send bare LF. The state machine accepts such a message,
+            // so its headers must be read rather than silently dropped.
+            sep_len = 2;
+            sep_pos = self.email.raw_data.windows(2).position(|w| w == b"\n\n");
+        }
         let mut new_headers = HashMap::new();
 
         if let Some(pos) = sep_pos {
             let header_bytes = &self.email.raw_data[..pos];
-            let body_bytes = &self.email.raw_data[pos + 4..];
+            let body_bytes = &self.email.raw_data[pos + sep_len..];
 
             // Headers are always ASCII/UTF-8 text in SMTP
             let header_str = String::from_utf8_lossy(header_bytes);
@@ -387,6 +414,89 @@ impl EmailReceivingFSM {
         }
 
         self.email.headers = new_headers;
+    }
+
+    /// True unless the message was refused at DATA time. The caller must not
+    /// deliver a refused message: the 5xx already went to the client.
+    pub fn is_accepted(&self) -> bool {
+        !self.rejected
+    }
+
+    /// The refusal for this message, or None if it may be accepted.
+    ///
+    /// Two rules, both about telling the sender the truth before the final 250:
+    /// mail claiming our own domain without a DKIM pass is a forgery we cannot
+    /// authenticate, and a recipient that does not exist here would otherwise be
+    /// accepted and silently destroyed.
+    fn validate(&self) -> Option<String> {
+        if self.reject_spoof {
+            // The envelope sender and the From: header are two different claims,
+            // and a forger picks whichever we do not check. Both are tested.
+            let mut claimed: Vec<String> = vec![self.email.from.clone()];
+            if let Some(header_from) = self.email.headers.get("from") {
+                for found in EMAIL_RE.find_iter(header_from) {
+                    claimed.push(found.as_str().to_string());
+                }
+            }
+                        let ours = claimed.iter().any(|sender| {
+                let lower = sender.to_ascii_lowercase();
+                match lower.rfind('@') {
+                    Some(at) => lower[at + 1..].eq_ignore_ascii_case(&self.server_name),
+                    None => false,
+                }
+            });
+            if ours {
+                let raw = String::from_utf8_lossy(&self.email.raw_data);
+                if !matches!(
+                    crate::utils::dkim::verify(&raw),
+                    crate::utils::DkimStatus::Pass
+                ) {
+                    return Some(
+                        "550 5.7.1 Mail from this domain must carry a valid DKIM signature".to_string(),
+                    );
+                }
+            }
+        }
+
+        for rcpt in &self.email.to {
+            let lower = rcpt.to_ascii_lowercase();
+            let Some(at) = lower.rfind('@') else {
+                return Some(format!("550 5.1.3 Malformed recipient <{}>", rcpt));
+            };
+            if !lower[at + 1..].eq_ignore_ascii_case(&self.server_name) {
+                return Some(format!("550 5.7.1 Relay denied for <{}>", rcpt));
+            }
+            if self.reject_unknown {
+                let local = &lower[..at];
+                if self.user_storage.get_user(local).is_none()
+                    && crate::core::aliases::resolve(local).is_none()
+                {
+                    return Some(format!("550 5.1.1 No such mailbox <{}>", rcpt));
+                }
+            }
+        }
+        None
+    }
+
+    /// Decide the fate of a complete message, answer the client, and remember
+    /// the verdict. Called once, on the final chunk, before any 250.
+    fn finish_data(&mut self, stream: &mut MaybeTlsStream) -> io::Result<()> {
+        self.parse_body();
+        match self.validate() {
+            None => {
+                stream.write_all(b"250 2.0.0 OK\r\n")?;
+                stream.flush()?;
+            }
+            Some(refusal) => {
+                log::info!("[SMTP {}] refused message: {}", self.remote, refusal);
+                stream.write_all(format!("{}\r\n", refusal).as_bytes())?;
+                stream.flush()?;
+                self.email = ReceivedEmail::new();
+                self.rejected = true;
+            }
+        }
+        self.state = EmailReceivingState::WaitingForQuit;
+        Ok(())
     }
 
     pub fn get_email(&self) -> ReceivedEmail {
