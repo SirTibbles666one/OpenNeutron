@@ -36,8 +36,12 @@ tori.ns.cloudflare.com." "$(q slothlee.xyz NS | sed 's/\.$//;s/$/./' | sort -u)"
 # answers when asked directly.
 apex_ips="$(q slothlee.xyz A | tr '\n' ' ' | sed 's/ $//')"
 [ -n "$apex_ips" ] || problems+=("apex does not resolve at all")
+# Ask the origin that actually serves the site, over loopback. The previous version pinned
+# 34.147.215.88, which is neither our box nor a current Cloudflare edge address (the apex resolves to
+# 104.21.20.244 / 172.67.194.227): it is a stray host that answers 503, so this check reported drift on
+# every run. A monitor pointed at the wrong machine is worse than no monitor.
 origin_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
-    --resolve slothlee.xyz:443:34.147.215.88 https://slothlee.xyz/ 2>/dev/null)
+    -H "Host: slothlee.xyz" http://127.0.0.1:3100/ 2>/dev/null || echo 000)
 # A deploy restarts the site container, so a single 503 is not drift — it is a rebuild. Retry before
 # calling it a problem, or the watchdog reports every release as an outage.
 if [ "$origin_code" != "200" ]; then
