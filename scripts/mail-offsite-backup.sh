@@ -28,7 +28,8 @@ TOKEN="$(cat "$TOKEN_FILE")"
 # config. Everything in here is either secret or personal, hence the encryption.
 # The approval queue must exist before tar runs, or a missing member makes tar
 # exit non-zero under set -e and the whole backup is skipped.
-[ -f /opt/on/data/webauthn.json data/pgpkeys.json ] || printf %s "{}" > /opt/on/data/webauthn.json
+[ -f /opt/on/data/webauthn.json ] || printf %s "{}" > /opt/on/data/webauthn.json
+[ -f /opt/on/data/pgpkeys.json ] || printf %s "{}" > /opt/on/data/pgpkeys.json
 [ -f /opt/on/data/pending_users.json ] || printf %s "{}\n" > /opt/on/data/pending_users.json
 [ -f /opt/on/data/ephemeral.json ] || printf %s '{"entries":{},"receipts":{}}' > /opt/on/data/ephemeral.json
 [ -f /opt/on/data/notes.json ] || printf %s '{"notes":{}}' > /opt/on/data/notes.json
@@ -37,11 +38,20 @@ TOKEN="$(cat "$TOKEN_FILE")"
 [ -f /opt/on/data/arrival.json ] || printf %s '{"arrivals":{}}' > /opt/on/data/arrival.json
 [ -f /opt/on/data/push.json ] || printf %s '{"subs":{}}' > /opt/on/data/push.json
 # Losing this file invalidates every browser already subscribed, so it is kept.
+# The bot's database is the half of the bot that cannot be re-created: its tokens live in
+# .env, but guild settings, AI memory and history live here. Dump it beside the env file so
+# one archive carries both, and refuse to continue on an empty dump rather than ship a
+# backup that looks fine and restores nothing.
+docker exec sloth-pg pg_dump -U sloth -d sloth --clean --if-exists | gzip > /opt/sloth-bot/backup/sloth.sql.gz
+DUMP_BYTES=$(stat -c %s /opt/sloth-bot/backup/sloth.sql.gz)
+[ "$DUMP_BYTES" -gt 2048 ] || { log "ERROR bot database dump is only ${DUMP_BYTES} bytes"; exit 1; }
+chown 1000:1000 /opt/sloth-bot/backup/sloth.sql.gz
+
 tar czf "$WORK/state.tgz" -C /opt/on \
   data/users.bin data/waitlist.json data/pending_users.json data/recovery.json \
   data/twofactor.json data/sessions.json data/ephemeral.json data/notes.json \
   data/aliases.json data/scheduled.json data/arrival.json data/push.json data/vapid.json data/imported.json data/pqkeys.json data/mailboxlog.json data/logkey.json data/webauthn.json data/pgpkeys.json data/geoip.mmdb data/blobs dkim config.yml \
-  -C /opt sloth-bot/.env
+  -C /opt sloth-bot/.env sloth-bot/backup
 
 gpg --batch --yes --quiet --symmetric --cipher-algo AES256 \
     --passphrase-file "$PASS_FILE" \
