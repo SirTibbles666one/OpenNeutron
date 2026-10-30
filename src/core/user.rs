@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use serde::{Serialize, Deserialize};
 use std::fs::{File, OpenOptions};
+use std::path::Path;
 use std::io::{Read, Write, Error, ErrorKind};
 use std::io;
 use bincode;
@@ -75,7 +76,7 @@ pub struct User {
 impl User {
     #[allow(dead_code)]
     pub fn new(uid: u128, username: String, password_hash: String, public_key: PublicKey, salt: String, encrypted_private_key: Option<String>) -> Self {
-        User {
+        let mut user = User {
             uid,
             username,
             passwordHash: Some(password_hash),
@@ -90,12 +91,33 @@ impl User {
             encrypted_private_key,
             setup_token: None,
             credentials_changed_at: 0,
+        };
+        user.seal_password();
+        user
+    }
+
+    /// Wrap the stored hash with the per-account pepper. Idempotent, so it is safe
+    /// to call after any assignment to 'passwordHash'.
+    pub fn seal_password(&mut self) {
+        if let Some(hash) = &self.passwordHash {
+            if crate::utils::password::is_legacy(hash) {
+                self.passwordHash = Some(crate::utils::password::wrap(&self.salt, hash));
+            }
+        }
+    }
+
+    /// Verify against the peppered hash, falling back to legacy hashes so that
+    /// accounts created before peppering still log in (and can be upgraded).
+    pub fn verify_password_peppered(&self, presented: &str) -> bool {
+        match &self.passwordHash {
+            Some(hash) => crate::utils::password::verify(hash, &self.salt, presented),
+            None => self.verify_password(presented),
         }
     }
 
     pub fn create_user(username: String, password_hash: String, public_key: PublicKey, encrypted_private_key: String) -> Self {
         let uid = gen_uid();
-        User {
+        let mut user = User {
             uid,
             username,
             passwordHash: Some(password_hash),
@@ -110,7 +132,9 @@ impl User {
             encrypted_private_key: Some(encrypted_private_key),
             setup_token: None,
             credentials_changed_at: 0,
-        }
+        };
+        user.seal_password();
+        user
     }
 
     /// Create an account that has no password yet. The returned user carries a
@@ -203,11 +227,19 @@ fn gen_uid() -> u128 {
     rng.r#gen::<u128>()
 }
 
-fn gen_salt() -> String {
+pub fn gen_salt() -> String {
     let mut rng = rand::thread_rng();
     let a: u64 = rng.r#gen();
     let b: u64 = rng.r#gen();
     format!("{:016x}{:016x}", a, b)
+}
+
+/// SHA-256 of a secret, hex encoded. Reset tokens are stored only in this form.
+pub fn sha256_hex(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(value.as_bytes());
+    h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 /// 256 bits of OS entropy, hex encoded - this value is a password equivalent.
@@ -257,9 +289,36 @@ impl UserStorage {
         users.insert(user.username.clone(), user);
     }
 
+    /// The key an address actually lives under, matched without regard to case.
+    ///
+    /// Addresses are not case-sensitive: Admin@slothlee.xyz and admin@slothlee.xyz
+    /// are one mailbox. Keys are normally stored lowercase, but an account created
+    /// before that rule can carry capitals, so an exact miss falls back to a scan.
+    /// If two keys differ only by case we refuse to guess: silently merging two
+    /// accounts is worse than making the caller pick one.
+    fn resolve_key(users: &std::collections::HashMap<String, User>, username: &str) -> Option<String> {
+        if users.contains_key(username) {
+            return Some(username.to_string());
+        }
+        let needle = username.to_ascii_lowercase();
+        let mut found: Option<String> = None;
+        for key in users.keys() {
+            if key.to_ascii_lowercase() == needle {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(key.clone());
+            }
+        }
+        found
+    }
+
     pub fn get_user(&self, username: &str) -> Option<User> {
         let users = self.lock_users();
-        users.get(username).cloned()
+        match Self::resolve_key(&users, username) {
+            Some(key) => users.get(&key).cloned(),
+            None => None,
+        }
     }
 
     pub fn update_user(&self, user: User) {
@@ -267,14 +326,39 @@ impl UserStorage {
         users.insert(user.username.clone(), user);
     }
 
+    /// Mutate a user in place, under the same lock that guards the map.
+    ///
+    /// Replacing whole user objects (get -> clone -> update) loses concurrent
+    /// writes: a login that cloned before a delivery overwrites the new email
+    /// id on save. Callers that change one field must use this instead.
+    pub fn mutate_user<F: FnOnce(&mut User)>(&self, username: &str, f: F) -> bool {
+        let mut users = self.lock_users();
+        let key = match Self::resolve_key(&users, username) {
+            Some(k) => k,
+            None => return false,
+        };
+        match users.get_mut(&key) {
+            Some(user) => { f(user); true }
+            None => false,
+        }
+    }
+
+    /// Find an account by its numeric uid (used when reconciling blob ownership).
+    pub fn get_user_by_uid(&self, uid: u128) -> Option<User> {
+        let users = self.lock_users();
+        users.values().find(|u| u.uid == uid).cloned()
+    }
+
     pub fn check_user_exists(&self, username: &str) -> bool {
         let users = self.lock_users();
-        users.contains_key(username)
+        Self::resolve_key(&users, username).is_some()
     }
 
     pub fn delete_user(&self, username: &str) -> Vec<u128> {
         let mut users = self.lock_users();
-        if let Some(user) = users.remove(username) {
+        let key = Self::resolve_key(&users, username);
+        let removed = key.and_then(|k| users.remove(&k));
+        if let Some(user) = removed {
             user.emailIds.clone()
         } else {
             Vec::new()
@@ -340,6 +424,26 @@ impl UserStorage {
     }
 
     
+    /// Drop every reference to a message whose blob no longer exists.
+    ///
+    /// The index is the source of truth for what a mailbox contains, but a blob
+    /// can vanish (manual cleanup, a failed write, a partial restore). Without
+    /// this, the phantom entry survives every restart and errors on each open.
+    pub fn detach_email(&self, username: &str, email_uid: u128) -> bool {
+        let mut users = self.lock_users();
+        if let Some(user) = users.get_mut(username) {
+            let indexed = user.emailIds.contains(&email_uid);
+            let sent = user.sent_emails.contains(&email_uid);
+            user.emailIds.retain(|id| *id != email_uid);
+            user.sent_emails.retain(|id| *id != email_uid);
+            for group in &mut user.groups {
+                group.email_uids.retain(|id| *id != email_uid);
+            }
+            return indexed || sent;
+        }
+        false
+    }
+
     pub fn remove_email_from_groups(&self, username: &str, email_uid: u128) {
         let mut users = self.lock_users();
         if let Some(user) = users.get_mut(username) {
@@ -395,23 +499,62 @@ impl UserStorage {
     pub fn save_to_file(&self) -> io::Result<()> {
         let users = self.lock_users();
         
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&self.filename)?;
         let data = bincode::serialize(&*users)
             .map_err(|e| Error::new(ErrorKind::Other, e))?;
 
-        file.write_all(&data)?;
+        // Never truncate the live file: write a sibling and rename over it, so a
+        // crash, a full disk or a backup read mid-write cannot leave the account
+        // store empty. Truncate-then-write lost a whole mailbox the once it happened.
+        let tmp = format!("{}.tmp", self.filename);
+        {
+            let mut file = File::create(&tmp)?;
+            file.write_all(&data)?;
+            file.sync_all()?;
+        }
+
+        // Keep the previous good copy for recovery from a bad write.
+        if Path::new(&self.filename).exists() {
+            let _ = std::fs::copy(&self.filename, format!("{}.bak", self.filename));
+        }
+
+        std::fs::rename(&tmp, &self.filename)?;
+
+        // Make the rename itself durable.
+        if let Some(dir) = Path::new(&self.filename).parent() {
+            if let Ok(d) = File::open(dir) {
+                let _ = d.sync_all();
+            }
+        }
         Ok(())
     }
 
     pub fn load_from_file(&self) -> io::Result<()> {
-        let mut file = File::open(&self.filename)?;
-        let mut data = Vec::new();
-        file.read_to_end(&mut data)?;
-        let users: HashMap<String, User> = bincode::deserialize_from(&data[..]).map_err(|e| Error::new(ErrorKind::Other, e))?;
+        let read = |path: &str| -> io::Result<HashMap<String, User>> {
+            let mut file = File::open(path)?;
+            let mut data = Vec::new();
+            file.read_to_end(&mut data)?;
+            bincode::deserialize_from(&data[..]).map_err(|e| Error::new(ErrorKind::Other, e))
+        };
+
+        let users = match read(&self.filename) {
+            Ok(u) => u,
+            Err(primary) => {
+                // A corrupt live file must not mean "no accounts": try the copy
+                // taken before the last write before giving up.
+                let backup = format!("{}.bak", self.filename);
+                match read(&backup) {
+                    Ok(u) => {
+                        log::warn!(
+                            "[Storage] {} unreadable ({}); recovered {} account(s) from {}",
+                            self.filename, primary, u.len(), backup
+                        );
+                        u
+                    }
+                    Err(_) => return Err(primary),
+                }
+            }
+        };
+
         let mut users_lock = self.lock_users();
         *users_lock = users;
         Ok(())
