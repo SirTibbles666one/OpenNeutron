@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Is the Sloth Lee stack still standing?
+#
+# The mail watchdog covers mail, the homepage and the dashboard's DNS name. It says nothing
+# about the bot: a container can be up and gateway-disconnected, a database can be running
+# and refusing connections, and the only person who finds out is a server member.
+#
+# Silent when everything is right. Mails an alert and writes a log line when something breaks,
+# because a check nobody reads is not a check.
+#
+# --test forces every check to fail so the alert path itself can be proven. It never touches
+# a service: it lies to the script, not to the stack.
+set -uo pipefail
+
+LOG=/var/log/sloth-stack-watch.log
+STATE=/var/lib/sloth-stack-watch.state
+ALERT_TO=tibs@slothlee.xyz
+ALERT=/usr/local/bin/mail-alert.sh
+TEST=0
+[ "${1:-}" = "--test" ] && TEST=1
+
+log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG"; }
+
+problems=()
+
+check() { # name, then the command that must succeed
+  local name="$1"; shift
+  if [ "$TEST" = 1 ]; then problems+=("$name (forced)"); return; fi
+  if ! "$@" >/dev/null 2>&1; then problems+=("$name"); fi
+}
+
+# Container up and not crash-looping. RestartCount climbing means it is dying and coming back,
+# which from the outside looks identical to "running".
+container_ok() {
+  local name="$1"
+  local status restarts
+  status=$(docker inspect "$name" --format '{{.State.Status}}|{{.RestartCount}}' 2>/dev/null) || return 1
+  [ "${status%%|*}" = "running" ] || return 1
+  restarts="${status##*|}"
+  [ "${restarts:-0}" -lt 5 ]
+}
+
+bot_answers() {
+  curl -fsS -m 8 http://127.0.0.1:3200/healthz 2>/dev/null | grep -q '"ok":true'
+}
+
+db_answers() {
+  docker exec sloth-pg pg_isready -U sloth -q 2>/dev/null
+}
+
+db_has_data() {
+  local n
+  n=$(docker exec sloth-pg psql -U sloth -d sloth -tAc 'select count(*) from guild_settings' 2>/dev/null | tr -d '[:space:]')
+  [ "${n:-0}" -ge 1 ]
+}
+
+host_answers() { # url, expected status
+  local code
+  code=$(curl -sS -m 12 -o /dev/null -w '%{http_code}' -A 'sloth-watch/1.0' "$1" 2>/dev/null)
+  [ "$code" = "$2" ]
+}
+
+check "bot container"            container_ok sloth-bot
+check "postgres container"       container_ok sloth-pg
+check "database accepts queries" db_answers
+check "database still has guilds" db_has_data
+check "bot health endpoint"      bot_answers
+check "dashboard login door"     host_answers "https://app.slothlee.xyz/login" 200
+check "owner console"            host_answers "https://owner.slothlee.xyz/" 200
+check "homepage"                 host_answers "https://slothlee.xyz/" 200
+
+if [ "${#problems[@]}" -eq 0 ]; then
+  # Only speak when the state changes, or an alert every ten minutes becomes noise and
+  # noise becomes ignored.
+  if [ -f "$STATE" ]; then
+    log "recovered: all checks passing again"
+    rm -f "$STATE"
+  fi
+  exit 0
+fi
+
+summary=$(printf '%s; ' "${problems[@]}")
+summary=${summary%; }
+
+if [ -f "$STATE" ] && [ "$(cat "$STATE")" = "$summary" ]; then
+  log "still failing (no repeat alert): $summary"
+  exit 1
+fi
+
+printf '%s\n' "$summary" >"$STATE"
+log "ALERT: $summary"
+
+if [ -x "$ALERT" ]; then
+  printf '%s\n\nHost: %s\nTime: %s\n' "$summary" "$(hostname)" "$(date -u +%FT%TZ)" \
+    | "$ALERT" "[Sloth Lee] stack check failed" 2>/dev/null \
+    || log "alert script failed to send"
+else
+  log "alert script missing at $ALERT"
+fi
+
+exit 1
