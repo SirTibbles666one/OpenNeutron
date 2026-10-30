@@ -183,6 +183,13 @@ fn main() -> Result<()> {
         Some(policy) => (policy.reject_own_domain_spoof, policy.reject_unknown_recipients),
         None => (true, true),
     };
+    let max_smtp_connections = match &cfg.security {
+        Some(policy) => policy.max_smtp_connections.max(1),
+        None => 64,
+    };
+    // Connections currently being served. The accept loop refuses politely once
+    // this reaches the cap instead of spawning a thread per socket forever.
+    let live_connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     info!(
         "SMTP policy: refuse own-domain spoofs={}, reject unknown recipients={}",
@@ -207,12 +214,25 @@ fn main() -> Result<()> {
         let domain = domain.clone();
         let helo = helo_name.clone();
 
+        let in_flight = live_connections.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if in_flight > max_smtp_connections {
+            live_connections.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            // 421 tells a real MTA to come back later; it is not a permanent failure.
+            let _ = (&stream).write_all(b"421 4.3.2 Too many connections, try again later\r\n");
+            let _ = (&stream).flush();
+            warn!("[SMTP {}] refused: {} connections already open", remote, max_smtp_connections);
+            continue;
+        }
+
+        let counter = std::sync::Arc::clone(&live_connections);
         thread::spawn(move || {
-            if let Err(e) = handle_smtp_connection(
+            let outcome = handle_smtp_connection(
                 stream, remote.to_string(), tls_config,
                 user_storage, email_storage, domain, helo, dkim_enabled,
                 reject_spoof, reject_unknown,
-            ) {
+            );
+            counter.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            if let Err(e) = outcome {
                 warn!("[SMTP {}] Connection error: {}", remote, e);
             }
         });

@@ -32,6 +32,14 @@ pub struct SecuritySettings {
     /// sender is told instead of the message being accepted and dropped.
     #[serde(default = "default_true")]
     pub reject_unknown_recipients: bool,
+    /// How many SMTP connections may be open at once. Each one costs a thread,
+    /// so without a ceiling a few hundred idle sockets are the whole machine.
+    #[serde(default = "default_max_smtp_connections")]
+    pub max_smtp_connections: usize,
+}
+
+fn default_max_smtp_connections() -> usize {
+    64
 }
 
 fn default_true() -> bool {
