@@ -253,10 +253,67 @@ pub fn gen_setup_token() -> String {
 
 
 
+/// The account store is positional bincode, so adding a field to `User` makes
+/// every existing record unreadable with no way to tell why: the decode simply
+/// fails and the store looks empty. A header cannot fix that on its own, but it
+/// makes the failure legible and, together with the empty-store guard, stops a
+/// bad decode from being written back over the real accounts.
+const USER_STORE_MAGIC: &[u8; 8] = b"ONUSERS1";
+
+/// A store smaller than this cannot contain an account, so a decode that yields
+/// zero users from a larger file is a failure, not an empty server.
+const SMALLEST_POPULATED_STORE: usize = 64;
+
+/// Does the map length prefix fit inside the file at all?
+///
+/// bincode is not defensive: a corrupt length prefix of 0xABABABAB makes it try
+/// to reserve exabytes and abort the process instead of returning an error. A
+/// store cannot hold more entries than it has bytes, so that is the test.
+fn length_prefix_fits(body: &[u8]) -> bool {
+    if body.len() < 8 {
+        return false;
+    }
+    let declared = u64::from_le_bytes(match body[..8].try_into() {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    });
+    declared <= body.len() as u64
+}
+
+/// Decode either the current format or the unheadered one written before it.
+fn decode_users(raw: &[u8]) -> Result<HashMap<String, User>, bincode::Error> {
+    let body = if raw.len() >= USER_STORE_MAGIC.len() && &raw[..USER_STORE_MAGIC.len()] == USER_STORE_MAGIC {
+        &raw[USER_STORE_MAGIC.len()..]
+    } else {
+        // Written before the header existed: read it, and it is rewritten with
+        // the header on the next save.
+        raw
+    };
+
+    if !length_prefix_fits(body) {
+        return Err(Box::new(bincode::ErrorKind::Custom(
+            "account store length prefix does not fit the file".to_string(),
+        )));
+    }
+
+    bincode::deserialize_from(body)
+}
+
+fn encode_users(users: &HashMap<String, User>) -> Result<Vec<u8>, bincode::Error> {
+    let body = bincode::serialize(users)?;
+    let mut out = Vec::with_capacity(USER_STORE_MAGIC.len() + body.len());
+    out.extend_from_slice(USER_STORE_MAGIC);
+    out.extend_from_slice(&body);
+    Ok(out)
+}
+
 pub struct UserStorage {
     users: Mutex<HashMap<String, User>>,
     filename: String,
     pub domain: String,
+    /// Set when the file on disk could not be read. Writing over an unreadable
+    /// store would replace every account with the empty map we are holding.
+    blocked: std::sync::atomic::AtomicBool,
 }
 
 impl UserStorage {
@@ -281,7 +338,17 @@ impl UserStorage {
             users: Mutex::new(HashMap::new()),
             filename,
             domain,
+            blocked: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Refuse every write until an operator fixes whatever could not be read.
+    fn block_writes(&self) {
+        self.blocked.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn writes_blocked(&self) -> bool {
+        self.blocked.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn add_user(&self, user: User) {
@@ -499,7 +566,14 @@ impl UserStorage {
     pub fn save_to_file(&self) -> io::Result<()> {
         let users = self.lock_users();
         
-        let data = bincode::serialize(&*users)
+        if self.writes_blocked() {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "account store is read-only: the file could not be read at startup",
+            ));
+        }
+
+        let data = encode_users(&*users)
             .map_err(|e| Error::new(ErrorKind::Other, e))?;
 
         // Never truncate the live file: write a sibling and rename over it, so a
@@ -533,7 +607,19 @@ impl UserStorage {
             let mut file = File::open(path)?;
             let mut data = Vec::new();
             file.read_to_end(&mut data)?;
-            bincode::deserialize_from(&data[..]).map_err(|e| Error::new(ErrorKind::Other, e))
+            let users = decode_users(&data).map_err(|e| Error::new(ErrorKind::Other, e))?;
+            // An empty map out of a file that cannot be that small means the
+            // decode read something it did not understand.
+            if users.is_empty() && data.len() >= SMALLEST_POPULATED_STORE {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "{} bytes of account store decoded to zero accounts",
+                        data.len()
+                    ),
+                ));
+            }
+            Ok(users)
         };
 
         let users = match read(&self.filename) {
@@ -550,7 +636,17 @@ impl UserStorage {
                         );
                         u
                     }
-                    Err(_) => return Err(primary),
+                    Err(_) => {
+                        // Both the live file and the pre-write copy are unreadable.
+                        // Nothing may be written: the in-memory map is empty and
+                        // saving it would destroy every account on disk.
+                        self.block_writes();
+                        log::error!(
+                            "[Storage] {} and {}.bak are both unreadable; the account store is now read-only",
+                            self.filename, self.filename
+                        );
+                        return Err(primary);
+                    }
                 }
             }
         };
@@ -570,6 +666,24 @@ pub fn get_or_init_storage(filename: String, domain: String) -> UserStorage {
             storage
         },
         Err(e) => {
+            // A file that exists but will not parse is not the same as a missing
+            // one. Treating it as missing is how an unreadable store becomes an
+            // empty one on the next save.
+            let unusable_existing = std::path::Path::new(&filename)
+                .metadata()
+                .map(|meta| meta.len() > 0)
+                .unwrap_or(false);
+            if unusable_existing {
+                log::error!(
+                    "[Storage] '{}' exists but could not be read ({}). Refusing to create a replacement store: \
+                     the account store is read-only until this is fixed. The copy from before the last write is '{}.bak'.",
+                    filename,
+                    e,
+                    filename
+                );
+                storage.block_writes();
+                return storage;
+            }
             log::warn!("[Storage] No existing user storage at '{}': {}. Creating new store.", filename, e);
 
             
@@ -664,5 +778,81 @@ mod tests {
             .map(|_| crate::utils::emailutils::generate_email_uid(&user))
             .collect();
         assert_eq!(uids.len(), 1000, "generated colliding email UIDs");
+    }
+}
+
+#[cfg(test)]
+mod store_format_tests {
+    use super::*;
+
+    fn sample() -> HashMap<String, User> {
+        let mut map = HashMap::new();
+        let user = User::create_provisioned_user("admin".to_string(), true);
+        map.insert(user.username.clone(), user);
+        map
+    }
+
+    #[test]
+    fn the_current_format_round_trips_behind_a_header() {
+        let users = sample();
+        let encoded = encode_users(&users).expect("encode");
+        assert_eq!(&encoded[..8], USER_STORE_MAGIC);
+        let decoded = decode_users(&encoded).expect("decode");
+        assert_eq!(decoded.len(), 1);
+        assert!(decoded.contains_key("admin"));
+    }
+
+    #[test]
+    fn an_unheadered_store_still_reads() {
+        let users = sample();
+        let legacy = bincode::serialize(&users).expect("legacy encode");
+        let decoded = decode_users(&legacy).expect("legacy decode");
+        assert_eq!(decoded.len(), 1);
+    }
+
+    #[test]
+    fn a_truncated_store_is_an_error_not_an_empty_server() {
+        let users = sample();
+        let encoded = encode_users(&users).expect("encode");
+        let truncated = &encoded[..encoded.len() / 2];
+        assert!(decode_users(truncated).is_err());
+    }
+
+    #[test]
+    fn rubbish_behind_the_header_is_an_error() {
+        let mut broken = USER_STORE_MAGIC.to_vec();
+        broken.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        assert!(decode_users(&broken).is_err());
+    }
+
+    #[test]
+    fn an_unreadable_store_comes_up_read_only_instead_of_empty() {
+        let dir = std::env::temp_dir().join(format!("on-store-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("users.bin");
+        std::fs::write(&path, vec![0xAB; 512]).expect("write garbage");
+
+        let storage = get_or_init_storage(
+            path.to_string_lossy().to_string(),
+            "example.test".to_string(),
+        );
+
+        assert!(
+            storage.writes_blocked(),
+            "a store that cannot be read must never be writable"
+        );
+        assert_eq!(storage.get_user_count(), 0, "no phantom accounts");
+        assert!(
+            storage.save_to_file().is_err(),
+            "saving would replace every account with an empty map"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_guard_threshold_is_larger_than_an_empty_store() {
+        let empty = encode_users(&HashMap::new()).expect("encode");
+        assert!(empty.len() < SMALLEST_POPULATED_STORE);
     }
 }
