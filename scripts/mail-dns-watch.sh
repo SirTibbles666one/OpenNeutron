@@ -52,7 +52,7 @@ if [ "$origin_code" != "200" ]; then
     [ "$origin_code" = "200" ] && break
   done
 fi
-[ "$origin_code" = "200" ] || problems+=("origin behind the apex answered $origin_code, not 200")
+[ "$origin_code" = "200" ] || problems+=("origin http://127.0.0.1:3100/ (Host: slothlee.xyz) answered $origin_code, not 200 — checked because apex A is $apex_ips")
 check "mail A" "46.62.155.175" "$(q mail.slothlee.xyz A)"
 check "mail AAAA" "2a01:4f9:c013:dab1::1" "$(q mail.slothlee.xyz AAAA)"
 check "MX" "10 mail.slothlee.xyz." "$(q slothlee.xyz MX)"
@@ -113,7 +113,7 @@ done
 # --- the bot site answer ---
 code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 15 https://app.slothlee.xyz/ 2>/dev/null || echo 000)
 # / redirects to /app by design; a 302 here is the correct answer, not a fault.
-case "$code" in 200|302) ;; *) problems+=("app.slothlee.xyz answered $code") ;; esac
+case "$code" in 200|302) ;; *) problems+=("https://app.slothlee.xyz/ answered $code (expected 200 or the 302 to /app)") ;; esac
 
 # --- report ---
 if [ ${#problems[@]} -eq 0 ]; then
