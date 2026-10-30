@@ -221,6 +221,7 @@ pub struct AdminResetResponse {
 
 #[derive(Deserialize)]
 pub struct GetEmailRequest {
+    #[serde(deserialize_with = "crate::api::u128_flex::uid")]
     pub uid: u128,
 }
 
@@ -271,6 +272,7 @@ pub struct EmailFlagsResponse {
 
 #[derive(Deserialize)]
 pub struct GetEmailsBulkRequest {
+    #[serde(deserialize_with = "crate::api::u128_flex::uids")]
     pub uids: Vec<u128>,
 }
 
@@ -286,11 +288,13 @@ pub struct EmailUidsResponse {
 
 #[derive(Deserialize)]
 pub struct DeleteEmailRequest {
+    #[serde(deserialize_with = "crate::api::u128_flex::uid")]
     pub uid: u128,
 }
 
 #[derive(Deserialize)]
 pub struct SetEmailBytesRequest {
+    #[serde(deserialize_with = "crate::api::u128_flex::uid")]
     pub uid: u128,
     /// AES ciphertext (base64). When updating an encrypted email, supply the new ciphertext here.
     pub data: String,
@@ -343,11 +347,13 @@ pub struct SendEmailRequest {
 
 #[derive(Deserialize)]
 pub struct MarkEmailReadRequest {
+    #[serde(deserialize_with = "crate::api::u128_flex::uid")]
     pub uid: u128,
 }
 
 #[derive(Deserialize)]
 pub struct SetEmailStarredRequest {
+    #[serde(deserialize_with = "crate::api::u128_flex::uid")]
     pub uid: u128,
     pub starred: bool,
 }
@@ -386,11 +392,13 @@ pub struct CreateGroupRequest {
 
 #[derive(Deserialize)]
 pub struct GetGroupRequest {
+    #[serde(deserialize_with = "crate::api::u128_flex::uid")]
     pub uid: u128,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateGroupRequest {
+    #[serde(deserialize_with = "crate::api::u128_flex::uid")]
     pub uid: u128,
     pub title: Option<String>,
     pub filter_addresses: Option<Vec<String>>,
@@ -398,6 +406,7 @@ pub struct UpdateGroupRequest {
 
 #[derive(Deserialize)]
 pub struct DeleteGroupRequest {
+    #[serde(deserialize_with = "crate::api::u128_flex::uid")]
     pub uid: u128,
 }
 
