@@ -538,3 +538,55 @@ so a tampered message reported "must carry a valid DKIM signature" while the
 header sat in plain sight. The refusal now carries the verdict
 (`did not pass DKIM: body hash mismatch`) and a WARN names it in the log.
 `8972919`, mail tests 102/102.
+
+## Why hash-based CSP cannot work on this dashboard: Cloudflare rewrites the HTML
+
+Two identical requests to `https://app.slothlee.xyz/app`, same byte length, same
+first eight inline scripts — and the ninth differs:
+
+```
+request 1  …e036d478072e
+request 2  …04328c56bf88
+```
+
+The diff is Cloudflare's own injection:
+
+```js
+window.__CF$cv$params={r:'a532f5079ccd367f',t:'MTc5MzQ1MjgyNg=='}
+```
+
+Ray id and timestamp change on every response. The edge also makes that script
+create *another* inline script at runtime, which no static hash list can allow.
+
+Fetched from the app itself on port 3200, the same document has **8** inline
+scripts and no `__CF$cv$params`; through Cloudflare it has **9**. So the hash-CSP
+attempt was not defeated by Next.js, by header merging, or by a bug in the
+verifier — it was defeated by a script we do not serve and cannot hash.
+
+**Conclusion.** `script-src 'unsafe-inline'` stays on any Cloudflare-proxied
+document here. The honest bound is: injected script can *execute*, but it cannot
+reach the network (`connect-src 'self'`, and `fetch('https://example.com/leak')`
+throws). Removing the injection means turning off Cloudflare's JS detections —
+a bot-protection trade for a header, not a free win.
+
+### What did come free: `script-src-attr 'none'`
+
+Inline `<script>` blocks still need `'unsafe-inline'`; inline *event handler
+attributes* do not. Added to the enforced policy on `app.slothlee.xyz`:
+
+```
+script-src 'self' 'unsafe-inline'; script-src-attr 'none';
+```
+
+Proven on the live dashboard — same-origin image that 404s, `onerror` attribute
+attached, and:
+
+```
+probe:     ran: 0  complete: true  naturalWidth: 0     ← the error event fired
+violations: script-src-attr | inline  ×2
+```
+
+The handler was blocked and named as such, not silently skipped. Tour of seven
+screens (status, tickets, settings, server, actions, appeals, logs): all
+`shellReady: true`, `overflow 0`, **zero violations**. Nothing here uses inline
+handlers, which is what makes this safe to enforce.
