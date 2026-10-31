@@ -256,9 +256,10 @@ the user table loaded, the DKIM key returned and the account count is non-zero. 
 `/var/log/mail-restore-drill.log`.
 
 **A real disaster restore also needs**, and the archive deliberately does not carry: the
-binary (rebuild from git — a backup that pinned a build would restore last month's server
-with this month's data), TLS certificates (re-issue once DNS points at the new host), and
-the `/usr/src/app` layout the image expects.
+built binary (rebuild it — but note the *source* is now in the archive as
+`backup-repo/mail-repo.bundle`, because upstream refused the push and the fork had
+drifted), TLS certificates (re-issue once DNS points at the new host), and the
+`/usr/src/app` layout the image expects.
 
 ## Monitoring
 
@@ -661,6 +662,52 @@ token, so this is the same trust boundary, not a new one.
 
 Verified: `slothmail-20261031-134228.tgz.gpg`, 21,816,557 bytes, round-trip
 checked by the script, members spot-checked against the live filesystem.
+
+## The mail server's source existed on one disk only
+
+`/opt/on` is a git clone with `origin = OpenNeutron/OpenNeutron`, and that upstream
+refuses this PAT (`403 Resource not accessible by personal access token`), so the ten
+commits this server actually runs were **not pushed anywhere**. The fork
+(`SirTibbles666one/OpenNeutron`) has drifted 65 commits the other way, so a merge is not
+a five-minute job. Losing this disk would have meant rebuilding the mail server from a
+tree nobody has a copy of.
+
+The archive now carries `backup-repo/mail-repo.bundle` — `git -C /opt/on bundle create`
+before `tar`, refused under 64 KB, proved by cloning out of the uploaded snapshot.
+
+**The trap: a shallow clone makes a bundle that is not a backup.** `git -C /opt/on
+rev-parse --is-shallow-repository` said `true` (boundary commit `2c80a48`), so the first
+bundle referenced a parent it did not carry. `git bundle verify` was happy; the clone
+failed with `Could not read 2fb696a…` / `remote did not send all necessary objects`. Fix:
+`git fetch --unshallow origin` (anonymous fetch, the repo is public) → 20 commits →
+bundle verified as "complete history" and cloned cleanly.
+
+**Two smaller traps in that proof, both worth keeping:**
+
+- `git bundle verify` needs to run **inside a repository** — run from a bare temp dir it
+  says `need a repository to verify a bundle` and proves nothing.
+- a bundle whose only ref is `refs/heads/main` leaves a plain `git clone` with an unborn
+  HEAD (`remote HEAD refers to nonexistent ref`); clone with `-b main` and assert the
+  commit count.
+
+The first version of the proof script printed `PROOF OK` after that failed clone, because
+each step was unchecked and `set -e` was missing. It now exits non-zero on every step —
+a drill that reports success without cloning is worse than no drill.
+
+## The structure reads answered 404 in production
+
+`/api/structure/snapshots` and `/api/structure/preview` sat on `GUILD_SCOPED_ENDPOINTS`
+but never on `READ_ENDPOINTS`, and `handleApi` 404s any path outside it. So the snapshot
+list and the restore diff preview — the screen built to make restores safe — returned
+`{"ok":false,"error":"Not found."}`. Measured with a minted staff cookie before the fix
+(404 on both, 200 on `/api/stats/queues`) and after it (`200 {ok:true,snapshots:[]}` and
+`400 "That snapshot id is not valid."` for a missing `?snapshot=`, which is the route
+answering rather than the door refusing).
+
+What hid it: the contract generator's path class was `[a-z-]`, which stops at the second
+segment, so nested paths (`/api/stats/*`, `/api/structure/*`) never entered the generated
+surface even when registered — the pin could not disagree with reality. Both extractors
+now use `[a-z_/-]`.
 
 ## The restore drill, and the three things it caught
 

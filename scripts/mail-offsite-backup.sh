@@ -47,11 +47,23 @@ DUMP_BYTES=$(stat -c %s /opt/sloth-bot/backup/sloth.sql.gz)
 [ "$DUMP_BYTES" -gt 2048 ] || { log "ERROR bot database dump is only ${DUMP_BYTES} bytes"; exit 1; }
 chown 1000:1000 /opt/sloth-bot/backup/sloth.sql.gz
 
+# The mail server's source lives in a git repository on this disk and nowhere else:
+# OpenNeutron/OpenNeutron on GitHub refuses this PAT, and the fork's main has drifted
+# away from the tree that is actually deployed. A bundle is the whole history in one
+# file, so the archive can rebuild the code — not just the data it serves.
+rm -rf /opt/backup-repo/mail-repo.bundle
+mkdir -p /opt/backup-repo
+git -C /opt/on bundle create /opt/backup-repo/mail-repo.bundle main 2>>"$LOG" \
+  || { log "ERROR could not bundle the mail repository"; exit 1; }
+BUNDLE_BYTES=$(stat -c %s /opt/backup-repo/mail-repo.bundle)
+[ "$BUNDLE_BYTES" -gt 65536 ] || { log "ERROR mail repository bundle is only ${BUNDLE_BYTES} bytes"; exit 1; }
+log "mail repository bundled (${BUNDLE_BYTES} bytes, $(git -C /opt/on rev-list --count main) commits)"
+
 tar czf "$WORK/state.tgz" -C /opt/on \
   data/users.bin data/waitlist.json data/pending_users.json data/recovery.json \
   data/twofactor.json data/sessions.json data/ephemeral.json data/notes.json \
   data/aliases.json data/scheduled.json data/arrival.json data/push.json data/vapid.json data/imported.json data/pqkeys.json data/mailboxlog.json data/logkey.json data/webauthn.json data/pgpkeys.json data/geoip.mmdb data/blobs data/static dkim config.yml \
-  -C /opt sloth-bot/.env sloth-bot/backup sloth-bot/bugreports sloth-bot/secrets.json sloth-bot/owner \
+  -C /opt sloth-bot/.env sloth-bot/backup sloth-bot/bugreports sloth-bot/secrets.json sloth-bot/owner backup-repo \
   -C / etc/nginx/sites-available etc/nginx/sites-enabled etc/nginx/conf.d \
   etc/postfix/main.cf etc/postfix/master.cf etc/postfix/recipients.pcre \
   etc/systemd/resolved.conf.d etc/unbound/unbound.conf.d \
