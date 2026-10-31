@@ -91,8 +91,10 @@ Three things it depends on:
     `unsupported dictionary type: pcre` and `reject_unlisted_recipient` would refuse everything.
     The map is pcre rather than hash because mailbox names are case-insensitive
     (`Admin@` must reach `admin@`), and a hash lookup is not.
-  - **`/root/.admin.jwt` must be valid.** It expires; mint a new one from the JWT secret in
-    `config.yml` (the same authority as root on this box) or the sync only logs 401.
+  - **The sync mints its own staff token each run** from the `jwt.secret` in `config.yml`.
+    Do not point it back at a saved token: `/root/.admin.jwt` expires, and an expired token
+    leaves the map frozen rather than failing loudly. Minting per run is the same authority
+    as root on this box, scoped to a five-minute token.
   - **Role addresses are added by the script, not by the API**, because they are not accounts
     and cannot be aliases — `postmaster`, `abuse`, `hostmaster` and the like are reserved so a
     customer cannot claim them. The app routes them to staff.

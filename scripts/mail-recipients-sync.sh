@@ -17,16 +17,46 @@
 set -uo pipefail
 
 API="http://127.0.0.1:8080/api/admin/recipients"
-JWT_FILE="/root/.admin.jwt"
+CONFIG="/opt/on/config.yml"
 MAP="/etc/postfix/recipients.pcre"
 STAGE="$(mktemp)"
 trap 'rm -f "$STAGE"' EXIT
 
-if [ ! -r "$JWT_FILE" ]; then
-    echo "recipients-sync: no admin token at $JWT_FILE" >&2
+# The staff token is minted on every run from the same signing secret the app
+# uses. A saved token expires, and a silent expiry here would freeze the map —
+# nobody would notice until mail started bouncing.
+TOKEN="$(python3 - "$CONFIG" <<'PY'
+import base64, hashlib, hmac, json, sys, time
+
+secret = None
+try:
+    for line in open(sys.argv[1]):
+        text = line.strip()
+        if text.startswith("secret:") and "jwt" not in text:
+            candidate = text.split(":", 1)[1].strip().strip('"').strip("'")
+            if candidate and len(candidate) >= 16:
+                secret = candidate
+                break
+except OSError:
+    raise SystemExit("")
+if not secret:
+    raise SystemExit("")
+
+def b64(raw):
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+now = int(time.time())
+head = b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+body = b64(json.dumps({"sub": "tibs", "iat": now, "exp": now + 300}, separators=(",", ":")).encode())
+sig = hmac.new(secret.encode(), f"{head}.{body}".encode(), hashlib.sha256).digest()
+print(f"{head}.{body}.{b64(sig)}")
+PY
+)"
+
+if [ -z "${TOKEN:-}" ]; then
+    echo "recipients-sync: could not mint a staff token from $CONFIG" >&2
     exit 1
 fi
-TOKEN="$(tr -d '\n' < "$JWT_FILE")"
 
 BODY="$(curl -fsS --max-time 10 -H "Authorization: Bearer $TOKEN" "$API")" || {
     # Never fall through to writing an empty map: that would refuse every
