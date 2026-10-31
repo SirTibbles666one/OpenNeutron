@@ -1060,7 +1060,23 @@ inside the container) or any message it sent, and:
 python3 proofs/dkim-independent-check.py /path/to/message.eml
 ```
 
-`root@slothlee.xyz` is not a recipient (the map carries `postmaster@` and
-`abuse@`), so Postfix's own notifications to `root@` bounce. Nothing depends on
-them today; if operator mail should reach a human, add `root` as an alias to the
-owner in the app's alias system rather than editing the recipient map by hand.
+### root@ is where the MTA complains
+
+Postfix addresses its own failure notices to `root@$myorigin`, and until now that
+address was not a recipient here: every queue problem, undeliverable bounce and
+watchdog complaint was refused with `550` and became a second bounce, so operator
+mail reached nobody. `root` now routes like `postmaster@`, `abuse@` and
+`hostmaster@` — to `roles.owner` — and the recipient map (which is generated from
+the same list) carries it, so the front door accepts it before any data is
+transferred.
+
+```
+printf "Subject: operator probe\nFrom: postmaster@slothlee.xyz\nTo: root@slothlee.xyz\n\nprobe\n" \
+  | sendmail -f postmaster@slothlee.xyz root@slothlee.xyz
+→ postfix/smtp: to=<root@slothlee.xyz> … status=sent (250 2.0.0 OK)
+→ app: Email received for: ["root@slothlee.xyz"] … queued for user 'tibs'
+```
+
+The null return path fix above is what makes this work end to end: a notification
+carries `MAIL FROM:<>`, which used to be refused at `MAIL FROM` before the
+recipient was even considered.

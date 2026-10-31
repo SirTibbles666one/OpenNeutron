@@ -12,7 +12,8 @@
 #
 # The role addresses are added by this script rather than read from the API.
 # They are not accounts and cannot be aliases (the app reserves the names), but
-# RFC 5321 requires postmaster@ to be deliverable and abuse@ is where complaints
+# RFC 5321 requires postmaster@ to be deliverable, abuse@ is where complaints
+# are expected, and root@ is where the MTA addresses its own failure notices.
 # are expected; the app routes both to staff.
 set -uo pipefail
 
@@ -73,7 +74,7 @@ import json, sys, re
 domain = sys.argv[1]
 data = json.load(sys.stdin)
 names = {n.strip().lower() for n in data.get("recipients", []) if n.strip()}
-names.update({"postmaster", "abuse", "hostmaster"})
+names.update({"postmaster", "abuse", "hostmaster", "root"})
 for name in sorted(names):
     # Escape regex metacharacters in the local part; match without case.
     print("/(?i)^" + re.escape(name) + "@" + re.escape(domain) + "$/ OK")
@@ -84,7 +85,7 @@ if [ "$COUNT" -lt 1 ]; then
     echo "recipients-sync: refusing to install an empty map" >&2
     exit 1
 fi
-for required in postmaster abuse; do
+for required in postmaster abuse root; do
     grep -qi "${required}@" "$STAGE" || {
         echo "recipients-sync: map would omit ${required}@ — refusing to install" >&2
         exit 1
