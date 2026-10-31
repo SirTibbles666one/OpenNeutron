@@ -942,3 +942,98 @@ on disk:  on_demand | user:1411142904604528673 | first from the dashboard | 7b7a
 The last column is the point: a dashboard capture stores its key fingerprint, so
 it is visible to the restore straight away — the 82 retired rows are history, not
 the new normal.
+### Reading the deliverability reports, instead of just asking for them
+
+`_dmarc.slothlee.xyz` and `_smtp._tls.slothlee.xyz` both name an address to send
+reports to (`rua=mailto:tibs@slothlee.xyz`), and until 2026-10-31 nothing read
+them. The first evidence that a provider could not deliver was an audit months
+later, or a user asking why mail from a client never arrived.
+
+A cron cannot fix this by polling: this server has no IMAP — only SMTP in on
+2525 and the web app on 8080 — so nothing outside the process can see a report
+without a human's browser session. The report is therefore parsed where the
+bytes already are: `src/core/reports.rs`, called from the delivery path in
+`main.rs` right after a message is stored.
+
+How it behaves:
+
+* **Sniff** — the first 16 KB of the message only. A report arrives as
+  `multipart/report` and only the *inner* part says `application/tlsrpt+gzip`, so
+  looking at the outer headers alone finds nothing (that was the first version,
+  and it silently matched zero reports).
+* **Parse** — SMTP TLS-RPT as JSON (Google's format), DMARC aggregate as XML,
+  both gzip- or zip-wrapped or bare. Bounded at 8 MB per message and 4 MB per
+  decompressed payload; a report that cannot be parsed is logged at `info` and
+  dropped. A wrong alarm is worse than a missing one.
+* **Record** — one JSON line per report in `data/reports.jsonl`, which is in the
+  nightly archive. This is the historical record; the alert is the interruption.
+* **Alert** — only when `failures > 0`, mailed from `postmaster@slothlee.xyz` to
+  `roles.owner` (config.yml), because a bounce needs somewhere real to go. The
+  parse and the alert run on their own thread so the SMTP transaction never waits.
+
+Live proof, on this box, with a synthetic failing TLS-RPT report posted through
+the real inbound path:
+
+```
+before:   records 0
+send:     TLS-RPT, sts policy, 9 ok / 2 failed (certificate-expired)
+after:    records 1
+  {"kind":"tls-rpt","domain":"slothlee.xyz","total":11,"failures":2,
+   "notes":["sts: 2 failed (certificate-expired)"],"reporter":"Sloth Probe"}
+app log:  [SMTP] DKIM: pass for <postmaster@slothlee.xyz>
+          [SMTP] Email … queued for user 'tibs'
+ordinary mail sent afterwards: no new record
+```
+
+Check it by hand:
+
+```
+docker exec openneutron tail -5 /usr/src/app/data/reports.jsonl
+docker logs openneutron 2>&1 | grep '\[reports\]' | tail
+```
+
+#### The two defects the first real report exposed
+
+Both were worse than the missing feature, and neither was visible until a
+message had to be signed *and* verified by this server.
+
+**Relaxed body canonicalization deleted indentation.** `canonicalize_body_relaxed`
+split each line on whitespace and rejoined it with single spaces, so `"  - item"`
+became `"- item"`. Signing and verifying shared the mistake, so our own mail
+verified here and failed everywhere else — a message signed by this server was
+unverifiable at every other receiver. Now RFC 6376 §3.4.4 is implemented as
+written: a run of spaces/tabs inside a line collapses to one space (a run at the
+start of the line becomes one space, it is not removed), trailing whitespace goes,
+trailing empty lines go, one final CRLF. The RFC's own example is a test:
+`" C \r\nD \t E\r\n\r\n\r\n"` → `" C\r\nD E\r\n"`.
+
+**Verification read only the first DKIM-Signature header.** A message can carry
+several — this server's, rspamd's, a forwarder's. Judging it on whichever came
+first meant a valid signature sitting next to an unverifiable one was ignored,
+and own-domain mail was refused with `body hash mismatch` while holding a
+perfectly good signature. RFC 6376 §6.1 evaluates all of them and passes if any
+passes; that is what `verify()` does now.
+
+Two smaller protocol faults surfaced with them:
+
+* `MAIL FROM:<>` was refused as an invalid address. That is the null return path
+  (RFC 5321 §4.5.5) and it is how every bounce arrives, so no DSN ever reached a
+  user — mail that failed at the far end simply vanished — and each Postfix
+  notification became a second bounce. Empty return path is now accepted, and
+  only that: `MAIL FROM:<a@b>` is still validated.
+* The receiving side truncated the last CRLF of every message ("the terminator
+  is `\r\n.\r\n`" — but the leading `\r\n` belongs to the last line of the
+  message, not to the terminator). Harmless to relaxed canonicalization, fatal
+  to any `c=simple` signature sent to us.
+
+One open question, recorded so it is not rediscovered: on a message this server
+signed itself, rspamd's second signature has a body hash that matches no
+canonicalization of the received body (`bh=cGf1…` vs `5z6Qf…` for standard
+relaxed), while a message rspamd signs alone verifies fine. Multi-signature
+verification makes it harmless here; a receiver that scores invalid signatures
+would still see it.
+
+`root@slothlee.xyz` is not a recipient (the map carries `postmaster@` and
+`abuse@`), so Postfix's own notifications to `root@` bounce. Nothing depends on
+them today; if operator mail should reach a human, add `root` as an alias to the
+owner in the app's alias system rather than editing the recipient map by hand.

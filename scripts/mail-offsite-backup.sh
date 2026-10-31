@@ -62,7 +62,7 @@ log "mail repository bundled (${BUNDLE_BYTES} bytes, $(git -C /opt/on rev-list -
 tar czf "$WORK/state.tgz" -C /opt/on \
   data/users.bin data/waitlist.json data/pending_users.json data/recovery.json \
   data/twofactor.json data/sessions.json data/ephemeral.json data/notes.json \
-  data/aliases.json data/scheduled.json data/arrival.json data/push.json data/vapid.json data/imported.json data/pqkeys.json data/mailboxlog.json data/logkey.json data/webauthn.json data/pgpkeys.json data/geoip.mmdb data/blobs data/static dkim config.yml \
+  data/aliases.json data/scheduled.json data/arrival.json data/push.json data/vapid.json data/imported.json data/pqkeys.json data/mailboxlog.json data/logkey.json data/webauthn.json data/pgpkeys.json data/reports.jsonl data/geoip.mmdb data/blobs data/static dkim config.yml \
   -C /opt sloth-bot/.env sloth-bot/backup sloth-bot/bugreports sloth-bot/secrets.json sloth-bot/owner backup-repo \
   -C / etc/nginx/sites-available etc/nginx/sites-enabled etc/nginx/conf.d \
   etc/postfix/main.cf etc/postfix/master.cf etc/postfix/recipients.pcre \
