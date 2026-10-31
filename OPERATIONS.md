@@ -661,3 +661,55 @@ token, so this is the same trust boundary, not a new one.
 
 Verified: `slothmail-20261031-134228.tgz.gpg`, 21,816,557 bytes, round-trip
 checked by the script, members spot-checked against the live filesystem.
+
+## The restore drill, and the three things it caught
+
+A backup that round-trips as a *file* proves nothing about a restore. Downloaded
+the newest snapshot from `SirTibbles666one/sloth-mail-backups`, decrypted it,
+and booted both halves against the extracted copy — nothing touching production
+except reading `openneutron:local`'s binary.
+
+**What a restore actually needs.** The drill container is the production binary
+with the restored data mounted over it:
+
+```
+docker run -d --name restore-mail -p 127.0.0.1:18080:8080 -p 127.0.0.1:12525:2525 \
+  -v /opt/on/target:/usr/src/app/target:ro \
+  -v …/restored/data:/usr/src/app/data -v …/restored/config.yml:/usr/src/app/config.yml:ro \
+  -v …/restored/dkim:/usr/src/app/dkim:ro \
+  --entrypoint /usr/src/app/target/x86_64-unknown-linux-musl/release/OpenNeutron \
+  openneutron:local /usr/src/app/config.yml
+```
+
+The image's own entrypoint compiles from source on start — minutes of `cargo
+build` before it listens. Point `--entrypoint` at the musl binary instead.
+
+**Results.**
+
+```
+[Storage] Loaded 12 users from 'data/users.bin'
+[Storage] Email index consistent (74 orphaned blob(s) ignored)
+[DKIM] Loaded signing key … (selector='mail')
+SMTP server listening on 0.0.0.0:2525
+SMTP: queued for user 'e2ea' (total emails: 102)     ← 101 restored, 1 new
+web: / 200   /web 200   /login 200
+postgres: 73 tables, 72 identical, 0 restore errors
+          guild_settings md5 a7388d41a4bc7f7fbbc6825402be600a — identical
+          scheduled_jobs prod 23355 / restored 23354 (snapshot lag, not a defect)
+```
+
+**Three failures found, one of them serious.**
+
+1. **`data/static` was not in the archive.** The restored server booted, loaded
+   every user, accepted mail and answered **404 on every web route** — a mail
+   server nobody can log into. The archive had round-tripped perfectly and would
+   have restored that. Added to the tar list, backup re-run, drill repeated:
+   `/`, `/web`, `/login` all 200.
+2. **The contents API returns `content: ""` above 1 MB** — silently, with
+   `encoding: "none"`. A 21 MB snapshot downloaded as zero bytes and surfaced
+   later as `gpg: decrypt_message failed`. Use `/git/blobs/{sha}` (100 MB cap)
+   and assert the size before decrypting.
+3. **The drill's own path check lied**: members are stored relative to their tar
+   root, so `on/data/users.bin` can never exist. Three `MISSING` lines on a
+   healthy archive. Report paths that can exist, or the drill teaches the wrong
+   lesson.
