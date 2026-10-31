@@ -238,15 +238,9 @@ pub fn message(
     let from_header = header_value(&header_block, "from").unwrap_or_else(|| "unknown".to_string());
     let sender = address_of(&from_header);
 
-    let mut headers = std::collections::HashMap::new();
-    for line in header_block.lines() {
-        if let Some((key, value)) = line.split_once(':') {
-            let k = key.trim().to_lowercase();
-            if !k.is_empty() && !headers.contains_key(&k) {
-                headers.insert(k, value.trim().to_string());
-            }
-        }
-    }
+    // Same shape as the SMTP path: ordered, duplicates kept, folded lines joined.
+    let headers: Vec<(String, String)> =
+        crate::smtp::email_receiving_fsm::parse_headers(header_block.as_bytes());
 
     // The mailbox this lands in. `User` carries no address of its own (the
     // struct is positional bincode and must not grow), so it is built from the

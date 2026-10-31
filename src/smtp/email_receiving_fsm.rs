@@ -380,34 +380,13 @@ impl EmailReceivingFSM {
 
     pub fn parse_body(&mut self) {
         // Find the header/body separator in raw bytes - works for both text and binary emails
-        let mut sep_len = 4usize;
-        let mut sep_pos = self.email.raw_data.windows(4).position(|w| w == b"\r\n\r\n");
-        if sep_pos.is_none() {
-            // Some clients send bare LF. The state machine accepts such a message,
-            // so its headers must be read rather than silently dropped.
-            sep_len = 2;
-            sep_pos = self.email.raw_data.windows(2).position(|w| w == b"\n\n");
-        }
-        let mut new_headers = HashMap::new();
+        let mut new_headers: Vec<(String, String)> = Vec::new();
 
-        if let Some(pos) = sep_pos {
-            let header_bytes = &self.email.raw_data[..pos];
-            let body_bytes = &self.email.raw_data[pos + sep_len..];
-
-            // Headers are always ASCII/UTF-8 text in SMTP
-            let header_str = String::from_utf8_lossy(header_bytes);
-            for header in header_str.lines() {
-                if let Some((key, value)) = header.split_once(':') {
-                    let k = key.trim().to_lowercase().replace('\r', "").replace('\n', "");
-                    let v = value.trim().replace('\r', "").replace('\n', "");
-                    if !k.is_empty() {
-                        new_headers.insert(k, v);
-                    }
-                }
-            }
+        if let Some((header_bytes, body_start)) = split_header_body(&self.email.raw_data) {
+            new_headers = parse_headers(header_bytes);
 
             // Body may be binary (E2EE) - store best-effort text in content field
-            self.email.content = String::from_utf8_lossy(body_bytes).to_string();
+            self.email.content = String::from_utf8_lossy(&self.email.raw_data[body_start..]).to_string();
         } else {
             // No header/body separator - treat entire payload as body
             self.email.content = String::from_utf8_lossy(&self.email.raw_data).to_string();
@@ -433,8 +412,8 @@ impl EmailReceivingFSM {
             // The envelope sender and the From: header are two different claims,
             // and a forger picks whichever we do not check. Both are tested.
             let mut claimed: Vec<String> = vec![self.email.from.clone()];
-            if let Some(header_from) = self.email.headers.get("from") {
-                for found in EMAIL_RE.find_iter(header_from) {
+            if let Some(header_from) = self.email.header("from").map(|value| value.to_string()) {
+                for found in EMAIL_RE.find_iter(&header_from) {
                     claimed.push(found.as_str().to_string());
                 }
             }
@@ -507,6 +486,56 @@ impl EmailReceivingFSM {
 
 }
 
+/// Where the headers stop and the body starts. CRLF is the standard, but some
+/// clients send bare LF and the state machine accepts those messages, so both
+/// separators are recognised.
+pub(crate) fn split_header_body(raw: &[u8]) -> Option<(&[u8], usize)> {
+    if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+        return Some((&raw[..pos], pos + 4));
+    }
+    raw.windows(2)
+        .position(|w| w == b"\n\n")
+        .map(|pos| (&raw[..pos], pos + 2))
+}
+
+/// Parse a header block into ordered name/value pairs.
+///
+/// Two things a naive split loses and a mailbox needs:
+///   - folded headers: a continuation line starts with space or tab and belongs
+///     to the header above it, so it is joined rather than discarded;
+///   - duplicates: `Received:` is a trail, and collapsing it to the last one
+///     throws away where the message actually came from.
+pub(crate) fn parse_headers(header_bytes: &[u8]) -> Vec<(String, String)> {
+    let text = String::from_utf8_lossy(header_bytes);
+    let mut out: Vec<(String, String)> = Vec::new();
+
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with(' ') || line.starts_with('\t') {
+            if let Some((_, value)) = out.last_mut() {
+                let extra = line.trim();
+                if !extra.is_empty() {
+                    if !value.is_empty() {
+                        value.push(' ');
+                    }
+                    value.push_str(extra);
+                }
+            }
+            continue;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            let name = key.trim().to_ascii_lowercase();
+            if !name.is_empty() {
+                out.push((name, value.trim().to_string()));
+            }
+        }
+    }
+    out
+}
+
 /// SMTP transparency (RFC 5321 s.4.5.2): remove dot-stuffing - if a line starts with '.', remove it.
 fn smtp_dot_unstuff(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
@@ -521,4 +550,81 @@ fn smtp_dot_unstuff(data: &[u8]) -> Vec<u8> {
         at_line_start = b == b'\n';
     }
     out
+}
+#[cfg(test)]
+mod header_parsing_tests {
+    use super::*;
+
+    #[test]
+    fn a_folded_header_is_joined_not_dropped() {
+        let raw = b"Subject: a subject so long that\r\n it was folded\r\n\r\nbody";
+        let (headers, body_start) = split_header_body(raw).expect("split");
+        let parsed = parse_headers(headers);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].0, "subject");
+        assert_eq!(parsed[0].1, "a subject so long that it was folded");
+        assert_eq!(&raw[body_start..], b"body");
+    }
+
+    #[test]
+    fn duplicate_received_headers_survive_in_order() {
+        let raw = b"Received: from a\r\nReceived: from b\r\nSubject: x\r\n\r\nb";
+        let (headers, _) = split_header_body(raw).expect("split");
+        let parsed = parse_headers(headers);
+        let trail: Vec<&str> = parsed
+            .iter()
+            .filter(|(k, _)| k == "received")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(trail, vec!["from a", "from b"]);
+    }
+
+    #[test]
+    fn bare_lf_messages_are_split_too() {
+        let raw = b"Subject: lf\nFrom: a@b.test\n\nbody";
+        let (headers, body_start) = split_header_body(raw).expect("split");
+        let parsed = parse_headers(headers);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(&raw[body_start..], b"body");
+    }
+
+    #[test]
+    fn names_are_lowercased_for_lookup() {
+        let raw = b"From: Someone <a@b.test>\r\n\r\n";
+        let (headers, _) = split_header_body(raw).expect("split");
+        let parsed = parse_headers(headers);
+        assert_eq!(parsed[0].0, "from");
+    }
+
+    #[test]
+    fn a_parsed_message_serialises_with_the_whole_subject_and_the_whole_trail() {
+        // What the mailbox actually stores is ReceivedEmail::to_string(), so this
+        // checks the two defects end to end rather than only at the parser.
+        // Built on one line on purpose: a trailing backslash in a Rust string
+        // swallows the following indentation, and the folded line would lose
+        // the leading space that makes it a continuation.
+        let raw = b"From: outsider@example.net\r\nSubject: a very long subject that the sender\r\n wrapped onto a second line\r\nReceived: from relay-a.example\r\nReceived: from origin.example\r\n\r\nbody";
+        let (header_bytes, body_start) = split_header_body(raw).expect("split");
+        let mut email = crate::smtp::received_email::Email::new();
+        email.headers = parse_headers(header_bytes);
+        email.content = String::from_utf8_lossy(&raw[body_start..]).to_string();
+        let stored = email.to_string();
+
+        assert!(
+            stored.contains("a very long subject that the sender wrapped onto a second line"),
+            "the folded subject must be stored whole: {}",
+            stored
+        );
+        assert!(
+            stored.matches("received:").count() == 2,
+            "both hops of the delivery trail must survive: {}",
+            stored
+        );
+        assert!(stored.contains("origin.example"));
+    }
+
+    #[test]
+    fn a_message_without_headers_has_no_separator() {
+        assert!(split_header_body(b"just a body").is_none());
+    }
 }
