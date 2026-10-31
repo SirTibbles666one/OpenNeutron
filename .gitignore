@@ -26,7 +26,8 @@ target
 /target
 *.bin
 *.pem
-*.lock
+# *.lock was ignored wholesale; Cargo.lock is required by the --locked build
+!Cargo.lock
 data/blobs/*
 data/users.bin
 *.txt
