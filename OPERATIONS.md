@@ -634,3 +634,30 @@ Five unit tests pin that; it has not yet been exercised by a real outage.
 failure mode, but resolved is what Postfix's DANE lookups resolve through — a
 stray DO bit costs mail TLS authentication. That change needs its own controlled
 experiment (verify DANE still validates before and after), not a paragraph here.
+
+## The backup carried the data and not the machine
+
+The nightly archive had every message, every key and the bot's database — and
+none of the decisions that make this box behave the way it does. Restoring it
+onto a fresh server would have produced healthy data behind the wrong headers:
+no recipient map, no postscreen, no cron schedule, no CSP, and a reissued
+certificate that silently breaks the DANE record other mail servers check.
+
+Added to the same encrypted archive (44 KB compressed, everything resolves):
+
+```
+etc/nginx/sites-{available,enabled}  etc/nginx/conf.d
+etc/postfix/{main.cf,master.cf,recipients.pcre}
+etc/systemd/resolved.conf.d  etc/unbound/unbound.conf.d
+var/spool/cron/crontabs      etc/letsencrypt/{live,archive,renewal}
+usr/local/bin/{mail-*,sloth-stack-watch}.sh
+```
+
+`etc/letsencrypt` is in there **for the DANE pin**, not for convenience: the TLSA
+record points at the current key, so a restore that reissues a certificate
+without carrying the key order takes mail down until DNS is updated by hand.
+The archive is already GPG-symmetric and already holds the DKIM keys and the bot
+token, so this is the same trust boundary, not a new one.
+
+Verified: `slothmail-20261031-134228.tgz.gpg`, 21,816,557 bytes, round-trip
+checked by the script, members spot-checked against the live filesystem.

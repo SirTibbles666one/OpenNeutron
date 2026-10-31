@@ -51,7 +51,13 @@ tar czf "$WORK/state.tgz" -C /opt/on \
   data/users.bin data/waitlist.json data/pending_users.json data/recovery.json \
   data/twofactor.json data/sessions.json data/ephemeral.json data/notes.json \
   data/aliases.json data/scheduled.json data/arrival.json data/push.json data/vapid.json data/imported.json data/pqkeys.json data/mailboxlog.json data/logkey.json data/webauthn.json data/pgpkeys.json data/geoip.mmdb data/blobs dkim config.yml \
-  -C /opt sloth-bot/.env sloth-bot/backup sloth-bot/secrets.json sloth-bot/owner
+  -C /opt sloth-bot/.env sloth-bot/backup sloth-bot/bugreports sloth-bot/secrets.json sloth-bot/owner \
+  -C / etc/nginx/sites-available etc/nginx/sites-enabled etc/nginx/conf.d \
+  etc/postfix/main.cf etc/postfix/master.cf etc/postfix/recipients.pcre \
+  etc/systemd/resolved.conf.d etc/unbound/unbound.conf.d \
+  var/spool/cron/crontabs etc/letsencrypt/live etc/letsencrypt/archive etc/letsencrypt/renewal \
+  -C / usr/local/bin/mail-health.sh usr/local/bin/mail-alert.sh usr/local/bin/mail-dns-watch.sh \
+  usr/local/bin/mail-offsite-backup.sh usr/local/bin/mail-recipients-sync.sh usr/local/bin/sloth-stack-watch.sh
 
 gpg --batch --yes --quiet --symmetric --cipher-algo AES256 \
     --passphrase-file "$PASS_FILE" \
