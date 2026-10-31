@@ -286,6 +286,25 @@ pub struct EmailUidsResponse {
     pub uids: Vec<u128>,
 }
 
+/// A page of mailbox identifiers, with enough metadata for a client to know
+/// whether it has the whole list. `total` is what the mailbox holds, not what
+/// this page contains: a caller that ignores `has_more` is visibly wrong
+/// instead of quietly seeing a shortened inbox.
+#[derive(Serialize)]
+pub struct EmailUidsPage {
+    pub uids: Vec<u128>,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+}
+
+#[derive(Deserialize, Default)]
+pub struct ListEmailsRequest {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
 #[derive(Deserialize)]
 pub struct DeleteEmailRequest {
     #[serde(deserialize_with = "crate::api::u128_flex::uid")]

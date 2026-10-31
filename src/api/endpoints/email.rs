@@ -7,7 +7,7 @@ use crate::core::{UserStorage, EmailStorage, User};
 use crate::utils::unix_to_iso;
 use crate::api::dto::{
     GetEmailRequest, EmailBytesResponse, GetEmailsBulkRequest, EmailsBulkResponse,
-    EmailUidsResponse, DeleteEmailRequest, SetEmailBytesRequest, GetRecentEmailsRequest,
+    EmailUidsResponse, EmailUidsPage, ListEmailsRequest, DeleteEmailRequest, SetEmailBytesRequest, GetRecentEmailsRequest,
     SendEmailRequest, MarkEmailReadRequest, SetEmailStarredRequest, ErrorResponse, MessageResponse, json_header,
     GetPublicKeysRequest, GetPublicKeysResponse, RecipientPublicKey,
     SendEncryptedRequest, SendEncryptedResponse, DeliveryResult,
@@ -110,6 +110,21 @@ pub fn get_email(
     }
 }
 
+/// Page sizes. A client may ask for any number; the server decides what it will
+/// hand out, because an unbounded `limit` is the same denial of service as no
+/// pagination at all.
+const DEFAULT_PAGE: usize = 200;
+const MAX_PAGE: usize = 1000;
+/// One bulk read is a screenful, not a mailbox.
+const MAX_BULK_UIDS: usize = 200;
+
+pub(crate) fn clamp_page_limit(requested: Option<usize>, default: usize, max: usize) -> usize {
+    match requested {
+        None | Some(0) => default,
+        Some(value) => value.min(max),
+    }
+}
+
 pub fn get_emails_bulk(
     request: &mut Request,
     user: Option<User>,
@@ -128,6 +143,19 @@ pub fn get_emails_bulk(
         Ok(r) => r,
         Err(resp) => return resp,
     };
+
+    // Refuse rather than silently truncate: a client that asked for 5,000
+    // messages and got 200 would show a partial mailbox as if it were whole.
+    if req.uids.len() > MAX_BULK_UIDS {
+        let err = serde_json::to_vec(&ErrorResponse {
+            error: format!("Ask for at most {} messages at a time", MAX_BULK_UIDS),
+            code: "too_many_uids".into(),
+        })
+        .unwrap();
+        return Response::from_data(err)
+            .with_status_code(400)
+            .with_header(json_header());
+    }
 
     
     let allowed_uids: Vec<u128> = req.uids.into_iter()
@@ -191,7 +219,7 @@ pub fn email_flags(
 }
 
 pub fn list_email_uids(
-    _request: &mut Request,
+    request: &mut Request,
     user: Option<User>,
     _user_storage: Arc<UserStorage>,
     _email_storage: Arc<EmailStorage>,
@@ -204,7 +232,29 @@ pub fn list_email_uids(
         }
     };
 
-    let resp = EmailUidsResponse { uids: user.emailIds.clone() };
+    // A mailbox holds as many identifiers as its owner has ever received, and the
+    // response used to be all of them: at twenty thousand messages that is close
+    // to a megabyte per refresh, per tab. Pages now, defaulting to the first one.
+    let request_body: ListEmailsRequest = read_json_body(request).unwrap_or_default();
+    let limit = clamp_page_limit(request_body.limit, DEFAULT_PAGE, MAX_PAGE);
+    let offset = request_body.offset.unwrap_or(0);
+
+    let total = user.emailIds.len();
+    let uids: Vec<u128> = user
+        .emailIds
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .copied()
+        .collect();
+
+    let resp = EmailUidsPage {
+        has_more: offset.saturating_add(uids.len()) < total,
+        uids,
+        total,
+        offset,
+        limit,
+    };
     let body = serde_json::to_vec(&resp).unwrap();
     Response::from_data(body).with_status_code(200).with_header(json_header())
 }
@@ -341,9 +391,10 @@ pub fn list_recent_email_uids(
     };
 
     
+    let limit = clamp_page_limit(Some(req.limit), DEFAULT_PAGE, MAX_PAGE);
     let uids: Vec<u128> = user.emailIds.iter().rev()
         .skip(req.offset)
-        .take(req.limit)
+        .take(limit)
         .copied()
         .collect();
 
@@ -1461,4 +1512,30 @@ pub fn ephemeral_status(
 
     let body = serde_json::to_vec(&EphemeralStatusResponse { items }).unwrap();
     Response::from_data(body).with_status_code(200).with_header(json_header())
+}
+
+#[cfg(test)]
+mod page_limit_tests {
+    use super::*;
+
+    #[test]
+    fn an_absent_limit_takes_the_default() {
+        assert_eq!(clamp_page_limit(None, 200, 1000), 200);
+    }
+
+    #[test]
+    fn a_zero_limit_is_not_a_request_for_nothing() {
+        assert_eq!(clamp_page_limit(Some(0), 200, 1000), 200);
+    }
+
+    #[test]
+    fn a_reasonable_limit_is_honoured() {
+        assert_eq!(clamp_page_limit(Some(20), 200, 1000), 20);
+        assert_eq!(clamp_page_limit(Some(1000), 200, 1000), 1000);
+    }
+
+    #[test]
+    fn an_absurd_limit_is_capped() {
+        assert_eq!(clamp_page_limit(Some(usize::MAX), 200, 1000), 1000);
+    }
 }
