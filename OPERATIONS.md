@@ -498,3 +498,43 @@ Until that is understood, the dashboard keeps: `default-src 'none'`,
 `connect-src 'self'`, CDN-allowlisted images, `frame-ancestors 'none'`, and
 `script-src 'self' 'unsafe-inline'`. An injected script cannot reach the
 network; it can still run.
+
+## The DKIM branch nobody had tested: a *pass*
+
+Every earlier probe proved the refusal side — own-domain mail without a signature
+gets `550 5.7.1`. The acceptance side was never exercised, so "we verify DKIM"
+was an assertion. It is not any more.
+
+**What is verified.** `/opt/on/src/utils/dkim.rs` verifies the signature itself:
+DNS TXT at `<selector>._domainkey.<d>`, body hash, RSA-SHA256 over the
+canonicalised headers. It does not read rspamd's verdict. So the message has to
+carry a signature that the domain's published key actually validates.
+
+**How to reproduce.** Sign `relaxed/relaxed` with the real key
+(`/opt/on/dkim/slothlee.xyz.pem`, selector `mail`), send from an external
+vantage point, and read the app's own log line — not the SMTP reply:
+
+```
+signed    250 queued  →  [SMTP] DKIM: pass for <tibs@slothlee.xyz>   →  queued for user 'e2ea'
+tampered  550 5.7.1 Mail from this domain did not pass DKIM: body hash mismatch
+unsigned  550 5.7.1 Mail from this domain must carry a valid DKIM signature
+```
+
+**Two traps that cost this window an hour.**
+
+1. *The SMTP reply is not the verdict.* Postfix accepts at DATA (`250 Ok:
+   queued`) and relays to the app on `:2525`; the refusal comes back as a bounce
+   (`dsn=5.7.1, status=bounced`). A probe that asserts on the SMTP reply reports
+   `250 UNEXPECTED` for a message that was correctly refused. Read
+   `/var/log/mail.log` for the `status=bounced` line and the container log for
+   the DKIM verdict.
+2. *Loopback mail is signed by rspamd before the app sees it.* Inject from
+   `127.0.0.1` and all three cases come back "pass" — the app is verifying
+   rspamd's signature, not the sender's. Negative cases only mean anything from
+   outside the box.
+
+**Fixed while testing:** the refusal text was the same string for both failures,
+so a tampered message reported "must carry a valid DKIM signature" while the
+header sat in plain sight. The refusal now carries the verdict
+(`did not pass DKIM: body hash mismatch`) and a WARN names it in the log.
+`8972919`, mail tests 102/102.
