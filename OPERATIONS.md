@@ -1033,12 +1033,32 @@ Two smaller protocol faults surfaced with them:
   message, not to the terminator). Harmless to relaxed canonicalization, fatal
   to any `c=simple` signature sent to us.
 
-One open question, recorded so it is not rediscovered: on a message this server
-signed itself, rspamd's second signature has a body hash that matches no
-canonicalization of the received body (`bh=cGf1…` vs `5z6Qf…` for standard
-relaxed), while a message rspamd signs alone verifies fine. Multi-signature
-verification makes it harmless here; a receiver that scores invalid signatures
-would still see it.
+**What that first reading of the signatures got wrong.** An earlier version of
+this page said rspamd's second signature carried a body hash matching no
+canonicalization of the message, and left it as an open question. It was the
+checker that was wrong, not rspamd. Once our own canonicalization was fixed, the
+same message signed here verifies under an independent RFC 6376 implementation
+written from scratch (`proofs/dkim-independent-check.py`: public key from DNS,
+RSA check by `cryptography`, no code shared with the server):
+
+```
+signature 1: d=slothlee.xyz s=mail c=relaxed/relaxed
+  body hash signed   cGf1X4dtw5sBL96llGe4PtoFq9NcCwqTrxciSbHr35k=
+            computed cGf1X4dtw5sBL96llGe4PtoFq9NcCwqTrxciSbHr35k=  MATCH
+  rsa-sha256 PASS — an independent implementation agrees with the server
+```
+
+That value is exactly the hash rspamd was computing all along; our signer was
+the only party in the building producing a different one, which is also why
+rspamd stopped adding a second signature once ours became valid — the message now
+carries one signature, and it is the server's own.
+
+To re-run it, capture what the server transmits (an SMTP sink on `127.0.0.1:25`
+inside the container) or any message it sent, and:
+
+```
+python3 proofs/dkim-independent-check.py /path/to/message.eml
+```
 
 `root@slothlee.xyz` is not a recipient (the map carries `postmaster@` and
 `abuse@`), so Postfix's own notifications to `root@` bounce. Nothing depends on
