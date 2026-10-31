@@ -877,3 +877,46 @@ panel, 65 px pick targets, and no horizontal overflow. The four counts are kept
 apart — create / update / left in place / blocked — because a single "12
 changes" number hides the difference between adding a channel and being unable
 to read one.
+
+## DNS: why the box stopped resolving twice in one day
+
+`systemd-resolved` answered `SERVFAIL` (rcode 2) to **every** query while
+`unbound` on `127.0.0.1` answered correctly. The journal names the cause:
+
+```
+systemd-resolved: DNSSEC validation failed for question com IN DS: no-signature
+systemd-resolved: DNSSEC validation failed for question discord.com IN A: no-signature
+```
+
+`com` is a signed zone. A resolver that answers its DS query without a signature
+is either broken or stripping DNSSEC — and a validating resolver must then fail
+closed, which takes the whole box with it: containers up, bot in a restart loop,
+mail unable to resolve an MX.
+
+The resolver was validating against **Hetzner's plain resolvers**, because
+`/etc/netplan/50-cloud-init.yaml` listed them for `eth0`
+(`2a01:4ff:ff00::add:2`, `2a01:4ff:ff00::add:1`). Link DNS outranks the global
+setting, so `DNS=127.0.0.1` in `resolved.conf` was never being used.
+
+Fixed at the source: `eth0` now names only `127.0.0.1`. Applied at runtime with
+`resolvectl dns eth0 127.0.0.1` (never `netplan apply` on a live mail host over
+SSH — it can bounce the interface) and written into the netplan file for the
+next boot; the backup is `/root/netplan.pre-dnsfix.<epoch>`.
+
+Verified after the change:
+
+```
+getent hosts discord.com        → 162.159.135.232 …
+getent hosts mail.slothlee.xyz  → 2a01:4f9:c013:dab1::1
+resolvectl query dnssec-failed.org → DNSSEC validation failed: missing-key   (still validating)
+resolvectl query --type=TLSA _25._tcp.mail.slothlee.xyz
+  → 3 1 1 d931…2c50b   (DANE material intact, via DNS, 14.7 ms)
+```
+
+`dnssec-failed.org` still failing is the point: the fix did not turn validation
+off, it pointed it at a resolver that actually returns signatures.
+
+The watchdog now repairs the class rather than the symptom: when resolution
+fails it first points the link at `127.0.0.1` (skipping that if it already does)
+and then restarts `systemd-resolved` to clear the cached validation failure.
+A restart alone works only until the next signature-stripped answer.
