@@ -335,3 +335,43 @@ Security details, the reasoning behind the headers, the fail2ban jails and what 
 open: `/root/HARDENING.md`. Mail authentication state (SPF, DKIM alignment, DMARC
 `p=reject`, MTA-STS, TLS-RPT) is verified end-to-end through an outside receiver, not by
 reading the DNS zone.
+
+## Dashboard headers (app.slothlee.xyz)
+
+The staff dashboard is served by nginx at `/etc/nginx/sites-available/app-dashboard`,
+which is where its security headers live (the Node process sets none of them).
+Backups of that file: `/root/app-dashboard.pre-csp.<epoch>`.
+
+CSP, enforced:
+
+```
+default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
+img-src 'self' data: https://cdn.discordapp.com https://media.discordapp.net;
+font-src 'self' data:; connect-src 'self' wss://app.slothlee.xyz ws://app.slothlee.xyz;
+media-src 'self'; worker-src 'self' blob:; manifest-src 'self';
+frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none';
+upgrade-insecure-requests
+```
+
+How it was proven, and how to prove it again:
+
+1. Serve it as `Content-Security-Policy-Report-Only` first. Load the dashboard
+   with a staff session and a `securitypolicyviolation` listener installed via
+   CDP `Page.addScriptToEvaluateOnNewDocument` (installing it in the page is too
+   late — the bootstrap has already run). Tour the screens; expect zero.
+2. **Prove the listener itself fires** by requesting an image from a host the
+   policy does not allow. Without this step a zero is indistinguishable from a
+   broken collector.
+3. Flip to enforced, then confirm nothing was blocked (`disposition: 'enforce'`
+   in the violation events) and that the live feed still says "connected" — a
+   websocket is the one thing `'self'` does not cover in every browser, hence the
+   explicit `wss://`.
+
+What it buys even with `'unsafe-inline'` in `script-src`: an injected script
+cannot phone home. `fetch()` to another origin throws, and `<img>` beacons never
+load — verified live, not assumed.
+
+The report-only policy served alongside it drops `'unsafe-inline'` from
+`script-src`. Its violations on a page load are the cost of a nonce migration:
+8 inline scripts, which is Next.js's own bootstrap. Until that migration the
+enforced policy stays as measured.
