@@ -77,6 +77,35 @@ those messages left unsigned while DMARC said `p=reject`. Fixed by
 `/etc/rspamd/local.d/dkim_signing.conf` pointing at `/opt/on/dkim/slothlee.xyz.pem`,
 selector `mail`, group-readable by `_rspamd`.
 
+**The recipient map follows the mailboxes, and is case-insensitive on purpose.**
+Postfix refuses an unknown recipient at RCPT — before the DATA that would otherwise be
+accepted and then bounced — but only from a map that is maintained. `mail-recipients-sync.sh`
+(cron `*/2`) asks the app's `/api/admin/recipients` (the truth: accounts plus live aliases,
+minus pending signups) and writes `/etc/postfix/recipients.pcre`; it refuses to install an
+empty map, refuses a map that omits `postmaster@` or `abuse@`, and leaves the old file alone
+when the API does not answer.
+
+Three things it depends on:
+
+  - **`postfix-pcre` is installed.** Without it every lookup fails with
+    `unsupported dictionary type: pcre` and `reject_unlisted_recipient` would refuse everything.
+    The map is pcre rather than hash because mailbox names are case-insensitive
+    (`Admin@` must reach `admin@`), and a hash lookup is not.
+  - **`/root/.admin.jwt` must be valid.** It expires; mint a new one from the JWT secret in
+    `config.yml` (the same authority as root on this box) or the sync only logs 401.
+  - **Role addresses are added by the script, not by the API**, because they are not accounts
+    and cannot be aliases — `postmaster`, `abuse`, `hostmaster` and the like are reserved so a
+    customer cannot claim them. The app routes them to staff.
+
+**`roles.owner` decides who reads postmaster@ and abuse@.** Without it the choice is
+alphabetical, which put role mail in a test account. Set in `config.yml`:
+
+    roles:
+      owner: tibs
+
+An owner that does not exist, or is not an administrator, logs a warning and falls back to the
+first administrator — a configuration mistake must not swallow complaints.
+
 **The front door is postscreen, and the client's own DKIM decides own-domain mail.**
 Port 25 is answered by `postscreen`, which runs the tests that need no conversation
 (pregreet, DNSBL) and only then hands the connection to `smtpd`; the real listener
