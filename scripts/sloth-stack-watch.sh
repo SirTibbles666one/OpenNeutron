@@ -76,6 +76,16 @@ host_answers() { # url, expected status
 # on from a phone. Only ever runs when resolution is already broken, so it cannot
 # turn a healthy resolver into a broken one.
 if [ "$TEST" = 0 ] && ! dns_resolves discord.com; then
+  # Point the link at this box own resolver first: when eth0 carries a plain
+  # upstream, resolved answers SERVFAIL for signed zones (2026-10-31, twice) and
+  # a bare restart only works until the next bad answer. Then restart, which is
+  # what clears the cached validation failure.
+  if resolvectl status 2>/dev/null | grep -q "Current DNS Server: 127.0.0.1"      && resolvectl query discord.com >/dev/null 2>&1; then
+    log "DNS failing but resolved already uses 127.0.0.1; leaving the link alone"
+  else
+    resolvectl dns eth0 127.0.0.1 >/dev/null 2>&1 || true
+    log "link DNS pointed at 127.0.0.1"
+  fi
   log "DNS resolution failed; restarting systemd-resolved once"
   systemctl restart systemd-resolved
   sleep 3
