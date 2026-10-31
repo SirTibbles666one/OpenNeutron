@@ -77,6 +77,43 @@ those messages left unsigned while DMARC said `p=reject`. Fixed by
 `/etc/rspamd/local.d/dkim_signing.conf` pointing at `/opt/on/dkim/slothlee.xyz.pem`,
 selector `mail`, group-readable by `_rspamd`.
 
+**The front door is postscreen, and the client's own DKIM decides own-domain mail.**
+Port 25 is answered by `postscreen`, which runs the tests that need no conversation
+(pregreet, DNSBL) and only then hands the connection to `smtpd`; the real listener
+carries anvil limits (20 connections, 30/min per client, 60 messages/min, 120
+recipients/min). DNSBL scoring: `sbl`/`xbl` weighted 3 (spam source, exploited host),
+`bl.spamcop.net` 2, `zen` 1, threshold 3 — so a listing has to mean something before a
+sender is refused, and residential/dynamic listings alone only cost latency.
+
+Two settings that must stay as they are:
+
+  - `postscreen_greet_action = ignore`. `drop` refuses any client that answers the
+    preliminary banner promptly, which is most legitimate MTAs — the first version of
+    this config would have silently discarded ordinary mail.
+  - `dnsblog` must exist in `master.cf`. Without it postscreen logs
+    `psc_dnsbl_request: connect to private/dnsblog service` and silently performs **no**
+    DNSBL lookup at all, so every client passes and the config looks correct.
+
+`postscreen_access_list = permit_mynetworks` is the whole list: `cidr:127.0.0.0/8` is not
+valid there (`table lookup error -- ignoring the remainder of this access list`), and
+mynetworks already covers loopback.
+
+The app refuses own-domain senders that fail DKIM, which is what makes
+`p=reject` true of us as well as of everyone we tell. Two consequences worth knowing:
+
+  - Mail the box generates for itself — cron's daemon output, `mail-alert.sh`, certbot —
+    is injected by the local MTA and sometimes arrives unsigned. It is accepted when
+    **Postfix's own first `Received:` header** contains `(Postfix, from userid`, because
+    Postfix prepends that line and a remote sender cannot place anything above it. The
+    log says `own-domain mail accepted from local injection (unsigned)` when this fires.
+    Before this exception existed, the 00:00 certbot report bounced and nobody knew.
+  - Everything else from our domain must verify. A forgery from outside is refused at
+    DATA with `550 5.7.1` and the sender gets the bounce.
+
+Cost: a first-contact client waits about four seconds in postscreen (cached for an hour
+after that). Rollback is two files — `/root/main.cf.<stamp>` and `/root/master.cf.<stamp>`
+— then `postfix check && systemctl reload postfix`.
+
 **A `local.d` file must not repeat its section name.** Writing
 `dkim_signing { ... }` inside `local.d/dkim_signing.conf` nests it as
 `dkim_signing.dkim_signing`, which rspamd accepts with `syntax OK` and then ignores
