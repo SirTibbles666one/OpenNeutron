@@ -337,6 +337,46 @@ open: `/root/HARDENING.md`. Mail authentication state (SPF, DKIM alignment, DMAR
 `p=reject`, MTA-STS, TLS-RPT) is verified end-to-end through an outside receiver, not by
 reading the DNS zone.
 
+## Reading Google's TLS-RPT reports
+
+`_smtp._tls.slothlee.xyz` is `v=TLSRPTv1; rua=mailto:tibs@slothlee.xyz`, so every sender
+that reports sends a daily aggregate JSON into the `tibs` inbox (gzipped, named
+`google_com-slothlee_xyz-<start>-<end>-001.json.gz`). It arrives as ordinary mail, which
+is the point: one less dashboard to keep.
+
+**How to read one.** Ignore the headers, read `policies[]`: one entry per policy the sender
+applied. `policy.policy-type: sts` with `mode: enforce` and the `mx` list means **that
+sender enforced MTA-STS** — `total-failure-session-count` must be 0. A second entry with
+`policy-type: no-policy-found` and successes is *normal*: a sender that had not yet fetched
+or cached the policy delivered over verified TLS anyway. Any `failure-session-count` > 0,
+or a `result-type` naming a certificate/name mismatch, is the signal worth acting on.
+
+**Reading of 2026-10-30** (the first one collected): 5 successful sessions under the
+enforced policy, 1 under `no-policy-found`, **0 failures anywhere** — and the served
+policy, the `_mta-sts` TXT id, MX and the DANE TLSA record all matched what the report
+said was enforced.
+
+**Changed after it:** `max_age` 604800 (7 days) → **1209600 (14 days)**, which is the
+post-enforcement figure — senders keep enforcing through a policy-fetch outage instead of
+falling back. Order matters and is not interchangeable:
+
+1. write `/var/www/mta-sts/.well-known/mta-sts.txt` (vhost serves it from disk,
+   `Cache-Control: max-age=300`, DNS-only — no CDN copy to purge) and confirm it over
+   HTTPS;
+2. **then** bump the id in `_mta-sts.slothlee.xyz` (`2026102701` → `2026103101`).
+
+Bumping the id first would tell senders "the policy changed, go fetch it" a minute before
+the new text exists, and they would cache the *old* policy under the *new* id for the whole
+`max_age`. **The id must change whenever the policy changes** — an unchanged id means
+senders never re-fetch.
+
+Verified after the change: served policy `max_age: 1209600` (ETag moved `6ae0bba8-43` →
+`6ae60b7a-44`), `_mta-sts` TXT `v=STSv1; id=2026103101` from `dns.google`, MX
+`10 mail.slothlee.xyz.` and TLSA `3 1 1 d931…2c50b` unchanged. A `cf` update needs
+`--body` (the sub-command has no per-field flags): `cf dns records update <id> --zone
+slothlee.xyz --body '{"type":"TXT","name":"_mta-sts.slothlee.xyz","content":"v=STSv1;
+id=…","ttl":300}'`.
+
 ## Dashboard headers (app.slothlee.xyz)
 
 The staff dashboard is served by nginx at `/etc/nginx/sites-available/app-dashboard`,
