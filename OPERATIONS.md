@@ -697,12 +697,16 @@ a drill that reports success without cloning is worse than no drill.
 ## The structure reads answered 404 in production
 
 `/api/structure/snapshots` and `/api/structure/preview` sat on `GUILD_SCOPED_ENDPOINTS`
-but never on `READ_ENDPOINTS`, and `handleApi` 404s any path outside it. So the snapshot
-list and the restore diff preview — the screen built to make restores safe — returned
-`{"ok":false,"error":"Not found."}`. Measured with a minted staff cookie before the fix
-(404 on both, 200 on `/api/stats/queues`) and after it (`200 {ok:true,snapshots:[]}` and
-`400 "That snapshot id is not valid."` for a missing `?snapshot=`, which is the route
-answering rather than the door refusing).
+but never on `READ_ENDPOINTS`, and `handleApi` 404s any path outside it. Both answered
+`{"ok":false,"error":"Not found."}` to every caller, while `dashboard/REBUILD.md` listed
+them as live API. Measured with a minted staff cookie before the fix (404 on both, 200 on
+`/api/stats/queues`) and after it (`200 {ok:true,snapshots:[]}` and `400 "That snapshot id
+is not valid."` for a missing `?snapshot=` — the route answering rather than the door
+refusing).
+
+No screen consumes them yet (F6 draft), so nothing user-visible broke: what broke was the
+contract — a documented capability the server refused, which the next screen would have
+debugged from the wrong end.
 
 What hid it: the contract generator's path class was `[a-z-]`, which stops at the second
 segment, so nested paths (`/api/stats/*`, `/api/structure/*`) never entered the generated
