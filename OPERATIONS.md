@@ -804,3 +804,76 @@ postgres: 73 tables, 72 identical, 0 restore errors
    root, so `on/data/users.bin` can never exist. Three `MISSING` lines on a
    healthy archive. Report paths that can exist, or the drill teaches the wrong
    lesson.
+
+## Restoring from a snapshot, and the key that went away
+
+The dashboard's Server → Restore screen shows the diff before it offers the
+press, and the press carries a digest of that diff. Three things about the live
+box are worth writing down, because two of them were only found by using it.
+
+**1. The press is bound to the diff you were shown.** `POST /api/action` with
+`kind=structure_restore`, `id=<snapshot uuid>` and `confirm=<the preview's
+digest>`. The server rebuilds the diff at press time and refuses unless it
+still hashes to the same 32 hex — `409 stale_preview`, "The server changed
+since that preview — look again before restoring." Two presses from two tabs
+cannot both land, and a tab left open over lunch cannot restore yesterday's
+picture. No `confirm` at all is `400 confirm_required`; a bad uuid is
+`400 bad_snapshot`; a closed imaging module, a kill switch, read-only mode or a
+lapsed subscription is `403 blocked`. All of those are refused **before** the
+safety snapshot is taken, so a refusal writes nothing.
+
+**2. A successful restore takes a safety snapshot first.** The response carries
+`preRestoreId`, and that row appears at the top of the list the screen reloads.
+If the safety snapshot cannot be written, the restore stops and says so — the
+"nothing was changed" promise rests on that ordering.
+
+**3. The finding that mattered: 82 of 83 snapshots could not be opened at all.**
+Snapshot payloads are AES-GCM sealed with `SECRETS_KEY`. That key was re-sealed
+between 20 and 30 October, and every payload written under the old one became
+unreadable — while the list kept offering them, because the row's metadata
+(label, counts, size) is plaintext. The preview refused with "I could not read
+that snapshot", which reads like a corrupt row and is actually a rotated secret.
+Now:
+
+```sql
+ALTER TABLE guild_snapshots ADD COLUMN key_fingerprint TEXT;   -- migration 20261031171000
+```
+
+- every new snapshot stores `sha256(SECRETS_KEY)[0..16]`;
+- `/api/structure/snapshots` returns `readable: true | false | null` per row,
+  and the screen greys out the false ones with "sealed with a key this server no
+  longer holds — cannot be restored" and does not make them pickable;
+- preview/apply refuse a mismatched fingerprint with `code: "retired_key"`
+  before any decrypt;
+- `scripts/backfill-snapshot-keys.mjs` (runs inside the container, `--dry`
+  available) fingerprints the pre-existing rows: it tries to open each payload
+  and writes today's fingerprint or the literal `retired`.
+
+Run it once after any `SECRETS_KEY` rotation. Live result on this box: 83 rows
+→ 1 readable, 82 retired. **A rotated key silently orphans every snapshot
+taken before it**, so rotate deliberately and re-take a snapshot afterwards.
+
+### Proven on the box (2026-10-31)
+
+```
+list (Anti Ban Front): 25 rows, 1 readable, 24 retired
+retired preview:       {"ok":false,"code":"retired_key","error":"That snapshot was sealed with a key this server no longer holds…"}
+wrong digest:          http=409 {"code":"stale_preview"}          safety snapshots: 0
+no digest:             http=400 {"code":"confirm_required"}        safety snapshots: 0
+correct digest:        http=200 {"status":"applied","preRestoreId":"6569bf74-…"}
+                                                                   safety snapshots: 1
+audit_events:          restore.apply {"created":0,"updated":0,"settings":false}
+```
+
+`created: 0, updated: 0` is the point of choosing a snapshot of the live state:
+the whole path ran — gate, digest, safety snapshot, apply, audit — and the
+server's structure did not move.
+
+### Reading the screen
+
+At 390×700 the list renders one row per snapshot with counts, age and size, a
+`2 of 25 can be restored · 23 sealed with a retired key` line above the diff
+panel, 65 px pick targets, and no horizontal overflow. The four counts are kept
+apart — create / update / left in place / blocked — because a single "12
+changes" number hides the difference between adding a channel and being unable
+to read one.
