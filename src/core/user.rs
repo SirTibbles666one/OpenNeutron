@@ -357,9 +357,17 @@ impl UserStorage {
     /// expected at `abuse@`; neither is a real user, and both are reserved so a
     /// customer cannot claim them. They route to the first administrator, so the
     /// front door can honestly accept mail the standards say must be accepted.
+    ///
+    ///  is here for a different reason: it is where the MTA sends its own
+    /// failure notices. Refusing it turned every Postfix notification — queue
+    /// trouble, a bounce it could not deliver, a watchdog complaint — into a
+    /// second bounce, so operator mail went nowhere at all.
     pub fn role_owner(&self, local: &str) -> Option<String> {
         let lower = local.to_ascii_lowercase();
-        if !matches!(lower.as_str(), "postmaster" | "abuse" | "hostmaster") {
+        if !matches!(
+            lower.as_str(),
+            "postmaster" | "abuse" | "hostmaster" | "root"
+        ) {
             return None;
         }
         // A named owner first: a complaint must reach someone who reads it.
