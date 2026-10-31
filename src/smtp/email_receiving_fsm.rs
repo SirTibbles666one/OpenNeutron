@@ -430,9 +430,30 @@ impl EmailReceivingFSM {
                     crate::utils::dkim::verify(&raw),
                     crate::utils::DkimStatus::Pass
                 ) {
-                    return Some(
-                        "550 5.7.1 Mail from this domain must carry a valid DKIM signature".to_string(),
-                    );
+                    // Mail the box generates for itself (cron output, watchdog
+                    // alerts) is injected by the local MTA, which does not always
+                    // sign it. Refusing those would make the alerting system fail
+                    // silently, which is the one thing an alert must never do.
+                    //
+                    // Trust is placed on Postfix's own trace header: it prepends
+                    // that line, so a remote sender cannot get one above it.
+                    let locally_injected = self
+                        .email
+                        .header_all("received")
+                        .first()
+                        .map(|value| value.contains("(Postfix, from userid"))
+                        .unwrap_or(false);
+                    if locally_injected {
+                        log::info!(
+                            "[SMTP {}] own-domain mail accepted from local injection (unsigned)",
+                            self.remote
+                        );
+                    } else {
+                        return Some(
+                            "550 5.7.1 Mail from this domain must carry a valid DKIM signature"
+                                .to_string(),
+                        );
+                    }
                 }
             }
         }
