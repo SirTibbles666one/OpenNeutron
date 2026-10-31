@@ -920,3 +920,25 @@ The watchdog now repairs the class rather than the symptom: when resolution
 fails it first points the link at `127.0.0.1` (skipping that if it already does)
 and then restarts `systemd-resolved` to clear the cached validation failure.
 A restart alone works only until the next signature-stripped answer.
+
+### Capturing a snapshot from the dashboard
+
+`POST /api/action` `kind=structure_snapshot` — one press, no card needed on the
+server side (the screen still shows one, because retention can prune older
+on-demand snapshots and that deserves a sentence). It runs the same
+`createGuildSnapshot` as `/backup create`, so the module gate, kill switch,
+read-only mode and the money gate all apply, and the audit row is `snapshot.on_demand`
+plus `dashboard.action`.
+
+Live check on a guild with no snapshots:
+
+```
+before:   rows 0
+press:    http=200 {"outcome":{"status":"saved","counts":{"roles":2,"categories":2,"channels":2}}}
+after:    rows 1 readable 1
+on disk:  on_demand | user:1411142904604528673 | first from the dashboard | 7b7a949208d8ff79
+```
+
+The last column is the point: a dashboard capture stores its key fingerprint, so
+it is visible to the restore straight away — the 82 retired rows are history, not
+the new normal.
