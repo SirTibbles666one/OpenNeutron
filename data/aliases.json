@@ -1,0 +1,32 @@
+{
+  "aliases": {
+    "admin-staff": {
+      "username": "tibs",
+      "label": "Administration",
+      "created_at": 1793225135,
+      "disabled_at": null,
+      "received": 0
+    },
+    "brisk-badger-375": {
+      "username": "admintest",
+      "label": "",
+      "created_at": 1793203035,
+      "disabled_at": null,
+      "received": 0
+    },
+    "contact": {
+      "username": "tibs",
+      "label": "General contact",
+      "created_at": 1793408125,
+      "disabled_at": null,
+      "received": 0
+    },
+    "customer-support": {
+      "username": "tibs",
+      "label": "Customer support",
+      "created_at": 1793207202,
+      "disabled_at": null,
+      "received": 0
+    }
+  }
+}

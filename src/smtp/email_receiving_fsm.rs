@@ -426,10 +426,12 @@ impl EmailReceivingFSM {
             });
             if ours {
                 let raw = String::from_utf8_lossy(&self.email.raw_data);
-                if !matches!(
-                    crate::utils::dkim::verify(&raw),
-                    crate::utils::DkimStatus::Pass
-                ) {
+                // Hold the verdict rather than discarding it: a tampered message
+                // carries a signature that fails, and answering "must carry a
+                // valid DKIM signature" sends the operator hunting for a missing
+                // header that is sitting right there.
+                let verdict = crate::utils::dkim::verify(&raw);
+                if !matches!(verdict, crate::utils::DkimStatus::Pass) {
                     // Mail the box generates for itself (cron output, watchdog
                     // alerts) is injected by the local MTA, which does not always
                     // sign it. Refusing those would make the alerting system fail
@@ -449,10 +451,22 @@ impl EmailReceivingFSM {
                             self.remote
                         );
                     } else {
-                        return Some(
-                            "550 5.7.1 Mail from this domain must carry a valid DKIM signature"
+                        return Some(match verdict {
+                            crate::utils::DkimStatus::Fail(reason) => {
+                                let reason: String = reason.chars().take(120).collect();
+                                log::warn!(
+                                    "[SMTP {}] own-domain DKIM did not verify: {}",
+                                    self.remote,
+                                    reason
+                                );
+                                format!(
+                                    "550 5.7.1 Mail from this domain did not pass DKIM: {}",
+                                    reason
+                                )
+                            }
+                            _ => "550 5.7.1 Mail from this domain must carry a valid DKIM signature"
                                 .to_string(),
-                        );
+                        });
                     }
                 }
             }
