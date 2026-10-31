@@ -375,3 +375,45 @@ The report-only policy served alongside it drops `'unsafe-inline'` from
 `script-src`. Its violations on a page load are the cost of a nonce migration:
 8 inline scripts, which is Next.js's own bootstrap. Until that migration the
 enforced policy stays as measured.
+
+## The money gate, and the two ways it was not doing its job
+
+Entitlement ("may this guild write, judged on money alone") has to sit where the
+writes actually happen. It lived in the tool dispatcher, which covers every
+tool-backed write — but three dashboard and Discord writes never pass through
+it: closing a ticket, releasing a hold, deciding an appeal. Each calls its
+service directly, so a lapsed subscription could still do all three.
+
+Two defects, both now fixed:
+
+1. **The gate was missing on those paths.** The check now lives in
+   `writeBlocked()` (`src/services/security/killswitch.js`) and
+   `appealWriteBlocked()`, which are the last checkpoints those services call.
+2. **The read-only exemption was a dead letter on those same paths.** Both
+   services called their gate without a guild id, so `readOnlyForGuild(null)`
+   refused *every* guild — including the ones named in
+   `SLOTH_LEE_READONLY_EXCEPT`. On a box with `READONLY=1` a ticket close was
+   refused for the wrong reason, and the exemption it advertises did nothing.
+
+The lesson generalises: **a write gate that forgets the guild id silently
+disables the exception the gate exists to provide.** When a gate takes an
+optional guild id, check every call site passes it.
+
+### Proving it (do this after any change to the gate)
+
+`scripts/money-drill.mjs` in the bot repo drives the real endpoint with a staff
+session and a signed Paddle webhook. On a test guild:
+
+1. set `trial_ends_at` in the past, `paid_until` null → `read` returns 200 and
+   `entitlement.state` is `expired`; a `ticket_close` returns **403 with the
+   billing line**.
+2. `webhook-pay` (signed with the configured secret) → `paidUntil` extends; the
+   same close now gets past the gate (it fails later, on the drill ticket having
+   no real Discord thread — that is the proof it passed).
+3. `webhook-cancel` with a period that already ended → the close is refused with
+   the billing line again, and reads stay 200 throughout.
+4. Restore the row to `null/null` (legacy) and delete the drill tickets.
+
+A single refusal is not proof of the right refusal: read the message. A CSRF
+refusal and a read-only refusal both say 403, and the drill once "passed" on a
+wrong `csrf` field name before the field was corrected to `csrfToken`.
