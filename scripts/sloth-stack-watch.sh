@@ -68,6 +68,24 @@ host_answers() { # url, expected status
   [ "$code" = "$2" ]
 }
 
+# DNS is the failure that makes every other check lie. Twice now the host resolver
+# has degraded against unbound (DO, then EDNS0, then UDP, then TCP — the journal
+# says so) and returned SERVFAIL for everything: containers healthy, bot in a
+# restart loop, mail unable to resolve a single MX. Restarting systemd-resolved
+# restores it, so do that once here rather than mailing a symptom nobody can act
+# on from a phone. Only ever runs when resolution is already broken, so it cannot
+# turn a healthy resolver into a broken one.
+if [ "$TEST" = 0 ] && ! dns_resolves discord.com; then
+  log "DNS resolution failed; restarting systemd-resolved once"
+  systemctl restart systemd-resolved
+  sleep 3
+  if dns_resolves discord.com; then
+    log "DNS recovered after restarting systemd-resolved"
+  else
+    log "DNS still failing after the restart"
+  fi
+fi
+
 check "host can resolve DNS"      dns_resolves discord.com
 check "bot container"            container_ok sloth-bot
 check "postgres container"       container_ok sloth-pg

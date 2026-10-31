@@ -590,3 +590,47 @@ The handler was blocked and named as such, not silently skipped. Tour of seven
 screens (status, tickets, settings, server, actions, appeals, logs): all
 `shellReady: true`, `overflow 0`, **zero violations**. Nothing here uses inline
 handlers, which is what makes this safe to enforce.
+
+## When the resolver dies, everything else lies
+
+Two outages in fourteen hours, both the same shape: containers healthy, mail web
+200, bot crash-looping on `getaddrinfo EAI_AGAIN discord.com`. The cause was not
+the bot. `systemd-resolved` had degraded its feature set against unbound and
+eventually answered nothing:
+
+```
+00:00:56 Using degraded feature set UDP+EDNS0 instead of UDP+EDNS0+DO for DNS server 127.0.0.1
+00:01:12 Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 127.0.0.1
+00:01:27 Using degraded feature set TCP instead of UDP for DNS server 127.0.0.1
+13:33:35 DNSSEC validation failed for question discord.com IN A: no-signature
+```
+
+Losing the DO bit is what turns into `no-signature`: with no DNSSEC records the
+validator refuses every answer, and every name on the box becomes SERVFAIL.
+`dig @127.0.0.1 discord.com` answered fine the whole time — unbound was never the
+problem, only the front door was.
+
+**Diagnosis order that actually works.** `getent hosts <name>` on the host, then
+`dig +short @127.0.0.1`, then `dig +short @127.0.0.53`, then
+`journalctl -u systemd-resolved`. The middle two separating is the whole tell.
+
+**Self-heal, proven by breaking it.** `sloth-stack-watch.sh` now restarts
+`systemd-resolved` once when resolution is already failing — never when it is
+working, so it cannot create this outage. Tested deliberately:
+
+```
+$ systemctl stop systemd-resolved      → DNS is down, as intended
+$ sloth-stack-watch.sh                 → exit 0
+  13:40:19Z DNS resolution failed; restarting systemd-resolved once
+  13:40:22Z DNS recovered after restarting systemd-resolved
+```
+
+The bot no longer restarts when this happens: `loginWithRetry` backs off
+(2s → 4s → … cap 30s, six attempts) on transport failures and still refuses to
+retry `TokenInvalid`/`DisallowedIntents`, because a wrong token is not a blip.
+Five unit tests pin that; it has not yet been exercised by a real outage.
+
+**Not changed, deliberately.** Setting `DNSSEC=no` on resolved would remove the
+failure mode, but resolved is what Postfix's DANE lookups resolve through — a
+stray DO bit costs mail TLS authentication. That change needs its own controlled
+experiment (verify DANE still validates before and after), not a paragraph here.
