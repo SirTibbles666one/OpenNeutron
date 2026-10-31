@@ -417,3 +417,38 @@ session and a signed Paddle webhook. On a test guild:
 A single refusal is not proof of the right refusal: read the message. A CSRF
 refusal and a read-only refusal both say 403, and the drill once "passed" on a
 wrong `csrf` field name before the field was corrected to `csrfToken`.
+
+## Public site headers (slothlee.xyz, www)
+
+The marketing site is `sloth-site` on `:3100`, proxied by
+`/etc/nginx/sites-available/app.slothlee.xyz` (the file name predates the split;
+it serves the apex and www, not the dashboard). Backups:
+`/root/site.pre-csp.<epoch>`.
+
+Until now it answered with **no** CSP, nosniff, referrer policy or permissions
+policy — while the dashboard next door had all four. The public site is the one
+anyone can load, so that was the wrong way round.
+
+Enforced CSP (measured, not guessed):
+
+```
+default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
+img-src 'self' data: https:; font-src 'self' data:;
+connect-src 'self' https://app.slothlee.xyz; media-src 'self' https:;
+frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none';
+upgrade-insecure-requests
+```
+
+The one cross-origin call the site makes is the **status page's health poll** to
+`https://app.slothlee.xyz/healthz`. That host is named explicitly; nothing else
+is. Verified live: that fetch returns 200 while a fetch to any other origin
+throws.
+
+The report-only policy alongside it drops `'unsafe-inline'` from `script-src`.
+It reports **4 inline scripts per page** — the site's share of the nonce work
+(the dashboard's is 8).
+
+A trap worth remembering: the very first report-only tour showed 27 violations
+on `/mail` that never reproduced. They were stale documents/chunk references
+from before the header existed. **Re-tour on a clean load before believing a
+violation count**, otherwise you widen a policy to satisfy a cache.
