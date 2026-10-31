@@ -125,6 +125,22 @@ Two settings that must stay as they are:
     `psc_dnsbl_request: connect to private/dnsblog service` and silently performs **no**
     DNSBL lookup at all, so every client passes and the config looks correct.
 
+**Proving the drop path without a listed IP.** The blocking half of postscreen cannot be
+tested from a machine that is not on a blocklist. It can be proved honestly with a zone that
+exists only on this host:
+
+    # /etc/unbound/unbound.conf.d/zz-dnsbl-selftest.conf
+    server:
+        local-zone: "selftest.dnsbl.slothlee.xyz." static
+        local-data: "175.155.62.46.selftest.dnsbl.slothlee.xyz. 60 IN A 127.0.0.2"
+
+then `postconf -e "postscreen_dnsbl_sites = selftest.dnsbl.slothlee.xyz*3"`, reload, and connect
+from the public address. The answer is immediate and unambiguous:
+`521 5.7.1 Service unavailable; client [...] blocked using selftest.dnsbl.slothlee.xyz`, with
+`DNSBL rank 3` in the log. Revert both files afterwards — the zone must not survive the test.
+Use a name under the real domain, not `.invalid`: systemd-resolved refuses to forward `.invalid`
+by design, so the query never reaches unbound and the test silently "passes" by not blocking.
+
 `postscreen_access_list = permit_mynetworks` is the whole list: `cidr:127.0.0.0/8` is not
 valid there (`table lookup error -- ignoring the remainder of this access list`), and
 mynetworks already covers loopback.
