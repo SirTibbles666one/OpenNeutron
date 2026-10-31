@@ -42,6 +42,26 @@ fn default_max_smtp_connections() -> usize {
     64
 }
 
+/// Optional: the account that answers postmaster@ and abuse@. Without it the
+/// choice is alphabetical, which on this box landed role mail in a test
+/// account — a complaint going somewhere nobody reads is worse than a bounce.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct RoleSettings {
+    pub owner: Option<String>,
+}
+
+static ROLE_OWNER: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Recorded once at startup; the mail path reads it without threading config
+/// through every function that might deliver a message.
+pub fn set_role_owner(name: Option<String>) {
+    let _ = ROLE_OWNER.set(name.map(|value| value.trim().to_ascii_lowercase()));
+}
+
+pub fn role_owner_username() -> Option<String> {
+    ROLE_OWNER.get().cloned().flatten()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -56,6 +76,9 @@ pub struct Config {
     pub jwt: Option<JwtSettings>,
     #[serde(default)]
     pub security: Option<SecuritySettings>,
+
+    #[serde(default)]
+    pub roles: Option<RoleSettings>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -175,6 +198,7 @@ impl Default for Config {
             },
             jwt: None,
             security: None,
+            roles: None,
         }
     }
 }

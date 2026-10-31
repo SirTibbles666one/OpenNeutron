@@ -351,6 +351,44 @@ impl UserStorage {
         self.blocked.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// The account that answers the addresses nobody signs in as.
+    ///
+    /// RFC 5321 requires `postmaster@` to be deliverable and complaints are
+    /// expected at `abuse@`; neither is a real user, and both are reserved so a
+    /// customer cannot claim them. They route to the first administrator, so the
+    /// front door can honestly accept mail the standards say must be accepted.
+    pub fn role_owner(&self, local: &str) -> Option<String> {
+        let lower = local.to_ascii_lowercase();
+        if !matches!(lower.as_str(), "postmaster" | "abuse" | "hostmaster") {
+            return None;
+        }
+        // A named owner first: a complaint must reach someone who reads it.
+        if let Some(configured) = crate::config::role_owner_username() {
+            if let Some(user) = self.get_user(&configured) {
+                if user.is_admin {
+                    return Some(user.username);
+                }
+                log::warn!(
+                    "[SMTP] roles.owner '{}' is not an administrator; falling back to the first admin",
+                    configured
+                );
+            } else {
+                log::warn!(
+                    "[SMTP] roles.owner '{}' does not exist; falling back to the first admin",
+                    configured
+                );
+            }
+        }
+        let mut admins: Vec<String> = self
+            .get_all_users()
+            .into_iter()
+            .filter(|candidate| candidate.is_admin)
+            .map(|candidate| candidate.username)
+            .collect();
+        admins.sort();
+        admins.into_iter().next()
+    }
+
     pub fn add_user(&self, user: User) {
         let mut users = self.lock_users();
         users.insert(user.username.clone(), user);

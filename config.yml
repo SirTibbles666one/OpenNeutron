@@ -1,12 +1,16 @@
 server:
-  domain: "local.openneutron.com"
+  domain: "slothlee.xyz"
   smtp_port: 2525
   api_port: 8080
+  # Used to build links that leave the server (sealed notes).
+  public_url: "https://mail.slothlee.xyz"
   # Allow anyone to create their own account via POST /api/user/register.
   # Leave this false on a public deployment: an open endpoint hands out mailboxes
   # on your domain to anyone who asks. Accounts are otherwise created by an
   # administrator, who receives a one-time setup token for the new user.
-  allow_open_registration: false
+  allow_open_registration: true
+  registration_requires_approval: true
+  one_account_per_ip: false
   # Browser origins allowed to call the API cross-origin. The bundled web UI is
   # served from this same server, so it needs no entry here. Never use "*".
   cors_allowed_origins: []
@@ -20,24 +24,28 @@ storage:
 tls:
   # When true, a self-signed certificate is auto-generated on every start.
   # When false, cert_path and key_path must point to valid PEM files.
-  self_signed: true
-  cert_path: "certs/cert.pem"
-  key_path: "certs/key.pem"
+  self_signed: false
+  cert_path: "/etc/letsencrypt/live/mail.slothlee.xyz/fullchain.pem"
+  key_path: "/etc/letsencrypt/live/mail.slothlee.xyz/privkey.pem"
 
 dkim:
   # Enable DKIM verification on incoming emails (true/false).
   # Senders without DKIM are common and will not be rejected - status is only logged.
   enabled: true
   # Uncomment to configure signing of outgoing mail (future use):
-  #private_key_path: "dkim_private.pem"
-  # selector: "default"
+  private_key_path: "/usr/src/app/dkim/slothlee.xyz.pem"
+  selector: "mail"
 
 logging:
   # One of: trace, debug, info, warn, error
-  level: "trace"
+  level: "info"
 
 jwt:
   # Static secret for signing JWTs. Keep this long, random, and secret.
   # If omitted (or commented out), a new random secret is generated on every
   # startup - existing tokens will be invalidated on restart.
-  #secret: "change_me_to_a_long_random_string"
+  secret: "ea52463b02587eccf3fc1460527704c2d2513facbc8eebefd87f923b2f951d0e"
+
+# Who answers postmaster@ and abuse@. Must be an administrator.
+roles:
+  owner: tibs

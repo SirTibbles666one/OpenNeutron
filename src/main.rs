@@ -46,6 +46,9 @@ fn main() -> Result<()> {
         eprintln!("[Config] Failed to load config.yml: {}. Using defaults.", e);
         config::Config::default()
     });
+
+    // Who answers postmaster@ and abuse@. Set before anything can deliver.
+    config::set_role_owner(cfg.roles.as_ref().and_then(|roles| roles.owner.clone()));
     config::init(cfg.clone());
     init_logger(&cfg.logging.level);
     info!("Starting OpenNeutron Mail Server");
@@ -360,7 +363,21 @@ fn handle_smtp_connection(
                 }
             }
         };
-        let username: &str = match alias_owner.as_deref() {
+        // postmaster@ and abuse@ are not accounts; they belong to staff. Resolve
+        // them here so the message lands in a mailbox instead of being dropped
+        // after the front door accepted it.
+        let role_owner: Option<String> = if alias_owner.is_none()
+            && user_storage.get_user(username).is_none()
+        {
+            user_storage.role_owner(username)
+        } else {
+            None
+        };
+
+        let username: &str = match alias_owner
+            .as_deref()
+            .or(role_owner.as_deref())
+        {
             Some(owner) => owner,
             None => username,
         };

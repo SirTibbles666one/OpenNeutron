@@ -470,6 +470,7 @@ impl EmailReceivingFSM {
                 let local = &lower[..at];
                 if self.user_storage.get_user(local).is_none()
                     && crate::core::aliases::resolve(local).is_none()
+                    && self.user_storage.role_owner(local).is_none()
                 {
                     return Some(format!("550 5.1.1 No such mailbox <{}>", rcpt));
                 }
