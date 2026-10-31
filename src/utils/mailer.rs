@@ -44,6 +44,10 @@ fn rfc2822_now() -> String {
 pub fn send_plain(from: &str, to: &str, subject: &str, body: &str) -> Result<(), String> {
     let msgid = crate::core::user::gen_setup_token();
     let domain = emailutils::get_server_domain();
+    // Sign what will actually be transmitted: a body with bare newlines becomes
+    // CRLF on the wire, and the signature then fails with a body-hash mismatch.
+    let body = normalize_crlf(body);
+    let body = body.as_str();
     let raw = format!(
         "From: Sloth Lee Mail <{from}>\r\n\
          To: {to}\r\n\
@@ -121,11 +125,38 @@ fn mta_candidates() -> Vec<String> {
     hosts
 }
 
+/// MTA transport is CRLF end to end.
+fn normalize_crlf(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push_str("\r\n");
+            }
+            '\n' => out.push_str("\r\n"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn candidates_start_with_loopback() {
         assert_eq!(super::mta_candidates()[0], "127.0.0.1");
+    }
+
+    #[test]
+    fn bare_newlines_become_crlf() {
+        assert_eq!(super::normalize_crlf("a\nb"), "a\r\nb");
+        assert_eq!(super::normalize_crlf("a\r\nb"), "a\r\nb");
+        assert_eq!(super::normalize_crlf("a\rb"), "a\r\nb");
+        assert_eq!(super::normalize_crlf("a\r\r\nb"), "a\r\n\r\nb");
     }
 }
 

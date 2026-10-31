@@ -109,7 +109,12 @@ impl EmailReceivingFSM {
 
                 if let Some(rel) = combined.windows(5).position(|w| w == b"\r\n.\r\n") {
                     // 'rel' indexes into 'combined'; combined[0..lookback] = raw_data[search_start..].
-                    let raw_keep = search_start + rel;
+                    // rel points at the CRLF that ends the last line of the
+                    // message; the terminator is the "\r\n.\r\n" that follows it.
+                    // Keeping rel's two bytes is what a receiver is required to
+                    // do — dropping them truncates the message by one CRLF, and a
+                    // signature over c=simple then fails for everyone.
+                    let raw_keep = search_start + rel + 2;
                     if raw_keep <= self.email.raw_data.len() {
                         // The terminator starts inside already-accumulated data (split boundary).
                         self.email.raw_data.truncate(raw_keep);
@@ -326,6 +331,17 @@ impl EmailReceivingFSM {
                         if let Some(addr) = extract_email_address(&line_str) {
                             log::debug!("[SMTP {}] MAIL FROM: <{}>", self.remote, addr);
                             self.email.from = addr;
+                            self.state = EmailReceivingState::WaitingForRcptTo;
+                            stream.write_all(b"250 2.1.0 OK\r\n")?;
+                        } else if is_null_return_path(&line_str) {
+                            // RFC 5321 §4.5.5: "MAIL FROM:<>" is the null return
+                            // path, and it is how every bounce notification
+                            // arrives. Refusing it meant no DSN ever reached a
+                            // user — mail that fails at the far end simply
+                            // vanished — and turned each Postfix notification
+                            // into a second bounce.
+                            log::info!("[SMTP {}] MAIL FROM: <> (null return path, bounce)", self.remote);
+                            self.email.from = String::new();
                             self.state = EmailReceivingState::WaitingForRcptTo;
                             stream.write_all(b"250 2.1.0 OK\r\n")?;
                         } else {
@@ -662,5 +678,30 @@ mod header_parsing_tests {
     #[test]
     fn a_message_without_headers_has_no_separator() {
         assert!(split_header_body(b"just a body").is_none());
+    }
+}
+
+/// True for the null return path: `MAIL FROM:<>`, with or without a space and
+/// with optional ESMTP parameters after it.
+fn is_null_return_path(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    match lower.strip_prefix("mail from:") {
+        Some(rest) => rest.trim_start().starts_with("<>"),
+        None => false,
+    }
+}
+
+#[cfg(test)]
+mod null_path_tests {
+    use super::is_null_return_path;
+
+    #[test]
+    fn null_return_path_is_recognised() {
+        assert!(is_null_return_path("MAIL FROM:<>"));
+        assert!(is_null_return_path("mail from: <> SIZE=512"));
+        assert!(is_null_return_path("MAIL FROM:<> BODY=8BITMIME"));
+        assert!(!is_null_return_path("MAIL FROM:<a@b.example>"));
+        assert!(!is_null_return_path("MAIL FROM:"));
+        assert!(!is_null_return_path("RCPT TO:<>"));
     }
 }

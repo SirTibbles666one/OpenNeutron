@@ -1,4 +1,5 @@
 pub mod email;
+pub mod reports;
 pub mod user;
 
 pub use email::Email;

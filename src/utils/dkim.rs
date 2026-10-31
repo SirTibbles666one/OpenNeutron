@@ -41,19 +41,37 @@ pub fn verify(raw_email: &str) -> DkimStatus {
     let (header_section, _) = split_email(raw_email);
     let raw_headers = parse_raw_headers(header_section);
 
-    let sig_value = match raw_headers
-        .iter()
-        .find(|(name, _)| name.to_lowercase() == "dkim-signature")
-        .map(|(_, v)| v.clone())
-    {
-        Some(v) => v,
-        Option::None => return DkimStatus::None,
-    };
-
-    match verify_signature(raw_email, &raw_headers, &sig_value) {
-        Ok(()) => DkimStatus::Pass,
-        Err(e) => DkimStatus::Fail(e),
+    let signatures = signature_values(&raw_headers);
+    if signatures.is_empty() {
+        return DkimStatus::None;
     }
+
+    // A message can carry several signatures: this server's own, the MTA's, an
+    // author's, a forwarder's. RFC 6376 §6.1 evaluates all of them and passes if
+    // any one passes. Reading only the first header meant a valid signature was
+    // ignored because an unverifiable one happened to sit above it — which is
+    // exactly how this server refused its own alert mail.
+    let mut first_reason: Option<String> = None;
+    for sig_value in &signatures {
+        match verify_signature(raw_email, &raw_headers, sig_value) {
+            Ok(()) => return DkimStatus::Pass,
+            Err(reason) => {
+                if first_reason.is_none() {
+                    first_reason = Some(reason);
+                }
+            }
+        }
+    }
+    DkimStatus::Fail(first_reason.unwrap_or_else(|| "no usable signature".to_string()))
+}
+
+/// Every DKIM-Signature header value, in the order they appear.
+fn signature_values(raw_headers: &[(String, String)]) -> Vec<String> {
+    raw_headers
+        .iter()
+        .filter(|(name, _)| name.trim().eq_ignore_ascii_case("dkim-signature"))
+        .map(|(_, value)| value.clone())
+        .collect()
 }
 
 fn verify_signature(
@@ -208,12 +226,37 @@ fn strip_whitespace(s: &str) -> String {
 
 
 fn canonicalize_body_relaxed(body: &str) -> String {
-    let mut lines: Vec<String> = body
-        .lines()
-        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
-        .collect();
+    // RFC 6376 §3.4.4, in order: collapse each run of spaces/tabs inside a line
+    // to one space (a run at the start of a line collapses to one space, it is
+    // not removed), drop trailing whitespace, drop trailing empty lines, and end
+    // with a single CRLF.
+    //
+    // This used to split the line on whitespace and rejoin it with one space,
+    // which silently deleted leading indentation. The signature still verified
+    // here — both sides made the same mistake — but no other receiver could
+    // verify it, so our own mail failed DKIM everywhere except at home.
+    let mut lines: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let mut collapsed = String::with_capacity(line.len());
+        let mut in_run = false;
+        for c in line.chars() {
+            if c == ' ' || c == '\t' {
+                if !in_run {
+                    collapsed.push(' ');
+                    in_run = true;
+                }
+            } else {
+                collapsed.push(c);
+                in_run = false;
+            }
+        }
+        while collapsed.ends_with(' ') {
+            collapsed.pop();
+        }
+        lines.push(collapsed);
+    }
 
-    while lines.last().map(|l: &String| l.is_empty()).unwrap_or(false) {
+    while lines.last().map(|l| l.is_empty()).unwrap_or(false) {
         lines.pop();
     }
 
@@ -525,5 +568,39 @@ impl DkimSigner {
         let mut result = dkim_header.into_bytes();
         result.extend_from_slice(raw_email);
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relaxed_canonicalization_matches_the_rfc_example() {
+        // RFC 6376 §3.4.5.
+        assert_eq!(canonicalize_body_relaxed(" C \r\nD \t E\r\n\r\n\r\n"), " C\r\nD E\r\n");
+    }
+
+    #[test]
+    fn relaxed_canonicalization_keeps_indentation() {
+        assert_eq!(canonicalize_body_relaxed("  - one item\r\n"), " - one item\r\n");
+        assert_eq!(canonicalize_body_relaxed("\tindented\r\n"), " indented\r\n");
+    }
+
+    #[test]
+    fn relaxed_canonicalization_drops_trailing_whitespace_and_empty_lines() {
+        assert_eq!(canonicalize_body_relaxed("a   \r\n\r\n\r\n"), "a\r\n");
+        assert_eq!(canonicalize_body_relaxed(""), "\r\n");
+    }
+
+    #[test]
+    fn every_signature_on_a_message_is_considered() {
+        let headers = vec![
+            ("Received".to_string(), "from somewhere".to_string()),
+            ("DKIM-Signature".to_string(), "v=1; d=a.example".to_string()),
+            ("From".to_string(), "someone@a.example".to_string()),
+            ("dkim-signature".to_string(), "v=1; d=b.example".to_string()),
+        ];
+        assert_eq!(signature_values(&headers).len(), 2, "both signatures must be tried");
     }
 }

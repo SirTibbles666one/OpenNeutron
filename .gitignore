@@ -31,3 +31,6 @@ data/blobs/*
 data/users.bin
 *.txt
 *.py
+
+# Deliverability reports are machine records, not source
+/data/reports.jsonl

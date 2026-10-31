@@ -442,6 +442,15 @@ fn handle_smtp_connection(
                             warn!("[SMTP] Failed to persist user storage after delivery for '{}': {}", username, e);
                         }
 
+                        // Deliverability reports (DMARC aggregate, SMTP TLS-RPT)
+                        // arrive as ordinary mail. Read them where the bytes already
+                        // are: this server has no IMAP, so nothing else can see a
+                        // report without a human opening a browser. The parse and any
+                        // alert run on their own thread.
+                        if core::reports::sniff(&received.raw_data).is_some() {
+                            core::reports::ingest_async(received.raw_data.clone());
+                        }
+
                         // Tell their browsers, on a thread of its own: saving mail
                         // must never wait on somebody else's push service.
                         core::push::notify_async(
