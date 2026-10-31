@@ -985,6 +985,13 @@ app log:  [SMTP] DKIM: pass for <postmaster@slothlee.xyz>
 ordinary mail sent afterwards: no new record
 ```
 
+One caveat when checking by hand: a `curl` **from this box** to
+`https://app.slothlee.xyz` or `https://slothlee.xyz` returns 403 with
+`cf-mitigated: challenge` — Cloudflare challenges the mail host's own traffic to
+its proxied hostnames. That is not an outage. Check the origin instead
+(`http://127.0.0.1:3100/`, `http://127.0.0.1:3200/login`) or check from another
+machine.
+
 Check it by hand:
 
 ```
