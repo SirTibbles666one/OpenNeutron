@@ -452,3 +452,49 @@ A trap worth remembering: the very first report-only tour showed 27 violations
 on `/mail` that never reproduced. They were stale documents/chunk references
 from before the header existed. **Re-tour on a clean load before believing a
 violation count**, otherwise you widen a policy to satisfy a cache.
+
+## The hash-based CSP attempt, and why it is not shipped
+
+`script-src 'unsafe-inline'` is the one thing the dashboard's enforced policy
+still gives away. The obvious fix — a nonce — is impossible here: the dashboard
+is `output: 'export'`, a static document served from disk, so a per-request
+nonce would be a constant. The next best option is build-time hashes: hash each
+inline script in `dashboard/build/index.html` and name the hashes in `script-src`.
+
+That was implemented, tested (6 unit tests) and deployed. **It broke the live
+dashboard**: `Checking staff…` forever, `window.__shellReady` never true, 8
+inline scripts refused under `script-src-elem` — while the response carried the
+8 computed hashes and the browser's own `crypto.subtle` digest of those same
+scripts matched them byte for byte.
+
+It was rolled back in minutes. The lever is worth knowing: **nginx can strip an
+upstream header without a rebuild** —
+
+```
+location / {
+    proxy_hide_header Content-Security-Policy;
+}
+```
+
+The application's policy is computed in `src/http` from the build, so it only
+exists while that code is deployed; stripping it at nginx returns the site to the
+measured policy immediately. The code was then reverted and the container
+rebuilt, so nothing rests on the nginx line for safety.
+
+Open question for the next attempt (do not guess at it): the hashes provably
+matched the document's own inline scripts, yet the browser refused them. Worth
+checking before rewriting anything:
+
+1. whether the violations belong to a **different document** (a child frame or a
+   client-rendered region), whose inline scripts are not the ones in
+   `index.html`;
+2. whether Cloudflare **merges the two response CSP headers** into one value,
+   changing how the source list is parsed.
+
+A controlled experiment — one page, one known inline script, hash in the header
+— answers both in minutes and avoids another live failure.
+
+Until that is understood, the dashboard keeps: `default-src 'none'`,
+`connect-src 'self'`, CDN-allowlisted images, `frame-ancestors 'none'`, and
+`script-src 'self' 'unsafe-inline'`. An injected script cannot reach the
+network; it can still run.
