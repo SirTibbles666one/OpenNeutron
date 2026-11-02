@@ -30,6 +30,7 @@ pub mod ephemeral;
 pub mod notes;
 pub mod push;
 pub mod mailboxlog;
+pub mod keylog;
 pub mod pqkeys;
 pub mod geoip;
 pub mod webauthn;

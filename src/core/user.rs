@@ -317,6 +317,22 @@ pub struct UserStorage {
 }
 
 impl UserStorage {
+    /// Every account that holds a public key. Read-only, and deliberately narrow:
+    /// the key-transparency log needs to enumerate keys, not users.
+    pub fn key_inventory(&self) -> Vec<(String, Vec<u8>)> {
+        match self.users.lock() {
+            Ok(map) => map
+                .values()
+                .filter_map(|user| {
+                    user.publicKey
+                        .as_ref()
+                        .map(|key| (user.username.clone(), key.0.clone()))
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     /// Acquire the user map, tolerating a poisoned lock.
     ///
     /// The guarded data is a plain map that is never left half-updated, so if

@@ -293,6 +293,13 @@ pub fn register(
         }
         return error(500, "signup_failed", "Could not create the account; try again");
     }
+    if let Some(stored) = user_storage.get_user(&username) {
+        if let Some(key) = stored.publicKey.as_ref() {
+            if let Err(e) = crate::core::keylog::record_for(&username, key.0.as_slice()) {
+                log::warn!("[API] key transparency did not record '{}': {}", username, e);
+            }
+        }
+    }
     log::info!(
         "[API] Account '{}' self-registered (pending={}, bootstrap_admin={})",
         username,
@@ -372,6 +379,13 @@ pub fn setup_password(
     if let Err(e) = user_storage.save_to_file() {
         log::warn!("[API] Failed to persist after setup_password: {}", e);
     }
+    if let Some(stored) = user_storage.get_user(&user.username) {
+        if let Some(key) = stored.publicKey.as_ref() {
+            if let Err(e) = crate::core::keylog::record_for(&user.username, key.0.as_slice()) {
+                log::warn!("[API] key transparency did not record '{}': {}", user.username, e);
+            }
+        }
+    }
     log::info!("[API] Account '{}' completed first-time setup", user.username);
 
     // Anything sent to this address before it had a key has been held; now it
@@ -436,6 +450,13 @@ pub fn set_credentials(
         log::warn!("[API] Failed to persist after set_credentials: {}", e);
     }
 
+    if let Some(stored) = user_storage.get_user(&user.username) {
+        if let Some(key) = stored.publicKey.as_ref() {
+            if let Err(e) = crate::core::keylog::record_for(&user.username, key.0.as_slice()) {
+                log::warn!("[API] key transparency did not record '{}': {}", user.username, e);
+            }
+        }
+    }
     let msg = serde_json::to_vec(&MessageResponse { message: "Credentials updated".into() }).unwrap();
     Response::from_data(msg).with_status_code(200).with_header(json_header())
 }
@@ -501,6 +522,9 @@ pub fn reset_with_token(
     user_storage.update_user(target);
     if let Err(e) = user_storage.save_to_file() {
         log::warn!("[Recovery] Failed to persist reset for '{}': {}", username, e);
+    }
+    if let Err(e) = crate::core::keylog::record_removal(&username) {
+        log::warn!("[Recovery] key transparency did not record the removal of '{}': {}", username, e);
     }
     let _ = recovery.clear_token(&username);
     log::info!("[Recovery] Password reset completed for '{}'", username);

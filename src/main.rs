@@ -594,6 +594,10 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Post,      "/api/email/star",            Authenticated,  endpoints::email::set_email_starred);
     router.add_route(Method::Post,      "/api/email/flags",           Authenticated,  endpoints::email::email_flags);
     router.add_route(Method::Post,      "/api/email/publickeys",      Authenticated,  endpoints::email::get_public_keys);
+    // Key transparency: public on purpose — a sender checking a recipient's key has
+    // no account here, and a proof only insiders can fetch proves nothing.
+    router.add_route(Method::Get,       "/api/kt/head",                Open,           endpoints::keytransparency::head);
+    router.add_route(Method::Post,      "/api/kt/proof",               Open,           endpoints::keytransparency::proof);
     router.add_route(Method::Post,      "/api/email/sendencrypted",   Authenticated,  endpoints::email::send_encrypted);
     router.add_route(Method::Post,      "/api/email/sent/list",       Authenticated,  endpoints::email::list_sent_email_uids);
     router.add_route(Method::Post,      "/api/email/sent/recent",     Authenticated,  endpoints::email::list_recent_sent_email_uids);
