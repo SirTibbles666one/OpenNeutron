@@ -195,8 +195,62 @@ pub fn is_hybrid(message_key: &[u8]) -> bool {
     message_key.len() > 4 && message_key[..4] == HYBRID_MAGIC
 }
 
+/// What sealed a stored message key.
+///
+/// The fourth byte of the magic is a version, and a reader that only knows
+/// version 1 must be able to say "this was sealed by something newer" instead of
+/// mistaking it for a legacy RSA key. Mail already stored can never be re-created,
+/// so an unknown version is reported, never rewritten and never guessed at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Envelope {
+    /// No magic: an RSA-wrapped key from before the hybrid envelope existed.
+    Legacy,
+    /// "SLQ" + version 1 — RSA-OAEP seed and an ML-KEM-768 ciphertext.
+    HybridV1,
+    /// "SLQ" + a version this build does not know.
+    Unknown(u8),
+}
+
+pub fn classify(message_key: &[u8]) -> Envelope {
+    if message_key.len() > 4 && message_key[..3] == HYBRID_MAGIC[..3] {
+        return match message_key[3] {
+            1 => Envelope::HybridV1,
+            other => Envelope::Unknown(other),
+        };
+    }
+    Envelope::Legacy
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{classify, Envelope, HYBRID_MAGIC};
+
+    /// The version byte decides what a stored key is. A legacy key has no magic at
+    /// all; a newer one must be reported as newer rather than read as legacy, because
+    /// reading it as legacy would decrypt garbage and blame the account's key.
+    #[test]
+    fn classify_names_the_three_cases() {
+        let mut v1 = vec![0u8; 32];
+        v1[..4].copy_from_slice(&HYBRID_MAGIC);
+        assert_eq!(classify(&v1), Envelope::HybridV1);
+
+        let mut v2 = v1.clone();
+        v2[3] = 2;
+        assert_eq!(classify(&v2), Envelope::Unknown(2));
+
+        let legacy = vec![0x41u8; 256];
+        assert_eq!(classify(&legacy), Envelope::Legacy);
+    }
+
+    #[test]
+    fn classify_does_not_mistake_a_short_or_almost_magic_key() {
+        assert_eq!(classify(&[]), Envelope::Legacy);
+        assert_eq!(classify(&[0x53, 0x4c, 0x51]), Envelope::Legacy);
+        assert_eq!(classify(&[0x53, 0x4c, 0x52, 0x01, 0x00]), Envelope::Legacy);
+        // "SLQ" with no version byte yet is still too short to be an envelope we can read.
+        assert_eq!(classify(&[0x53, 0x4c, 0x51, 0x01]), Envelope::Legacy);
+    }
+
     use super::*;
     use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
     use ml_kem::kem::{Decapsulate, Encapsulate, Kem, KeyExport};

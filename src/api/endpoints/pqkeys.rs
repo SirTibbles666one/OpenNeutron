@@ -123,6 +123,7 @@ pub fn migration(
     let enabled = pqkeys::get(&user.username).is_some();
 
     let mut sealed = 0usize;
+    let mut unknown = 0usize;
     let mut pending: Vec<String> = Vec::new();
     let mut total = 0usize;
     for uid in &user.emailIds {
@@ -132,14 +133,24 @@ pub fn migration(
             Err(_) => continue,
         };
         total += 1;
-        match &email.message_key {
-            Some(key) if pqkeys::is_hybrid(key) => sealed += 1,
+        // A version this build does not know is neither sealed-and-fine nor
+        // re-sealable: it is counted on its own so the page can say so, rather than
+        // being silently offered to the browser as work it would fail to do.
+        let kind = email
+            .message_key
+            .as_deref()
+            .map(pqkeys::classify)
+            .unwrap_or(pqkeys::Envelope::Legacy);
+        match (&email.message_key, kind) {
+            (Some(_), pqkeys::Envelope::HybridV1) => sealed += 1,
+            (Some(_), pqkeys::Envelope::Unknown(_)) => unknown += 1,
+            _ => {}
+        }
+        if kind == pqkeys::Envelope::Legacy {
             // Either an RSA-wrapped key or no key at all: both are weaker than the
             // hybrid envelope and both can be re-sealed by the browser.
-            _ => {
-                if pending.len() < BATCH {
-                    pending.push(uid.to_string());
-                }
+            if pending.len() < BATCH {
+                pending.push(uid.to_string());
             }
         }
     }
@@ -150,7 +161,8 @@ pub fn migration(
             "enabled": enabled,
             "total": total,
             "sealed": sealed,
-            "pending": total.saturating_sub(sealed),
+            "unknown": unknown,
+            "pending": total.saturating_sub(sealed).saturating_sub(unknown),
             "uids": pending,
             "batch": BATCH,
         }))
