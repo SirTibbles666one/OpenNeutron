@@ -341,7 +341,204 @@ pub fn record_removal(account: &str) -> Result<(), String> {
     record(account, b"", None)
 }
 
+/// The same proof, shaped for a client: hashes, indices and a signed head, no keys.
+pub fn proof_json(account: &str) -> Option<serde_json::Value> {
+    let (leaf, index, path, head) = proof(account)?;
+    Some(serde_json::json!({
+        "leaf": {
+            "seq": leaf.seq,
+            "account": leaf.account,
+            "rsa": leaf.rsa,
+            "pq": leaf.pq,
+            "at": leaf.at,
+        },
+        "index": index,
+        "path": path
+            .iter()
+            .map(|node| STANDARD.encode(node))
+            .collect::<Vec<String>>(),
+        "head": {
+            "size": head.size,
+            "root": head.root,
+            "alg": head.alg,
+            "pk": head.pk,
+            "sig": head.sig,
+        },
+    }))
+}
+
 /// The current signed head, if the log has ever been written.
+/// Consistency proof between two sizes of this log (RFC 6962 §2.1.2).
+///
+/// An audit path proves one leaf belongs to one root. This proves something else and
+/// stronger: that the tree at `second` contains the tree at `first` as a prefix, so a
+/// server cannot show one browser a history and another browser a different one at a
+/// later size. Without it, a pinned head only catches a log that shrank or changed
+/// under the same size — a rewrite that also grows looks exactly like normal operation.
+pub fn consistency_proof(first: usize, second: usize) -> Option<Vec<[u8; 32]>> {
+    let store = read_store();
+    let leaves: Vec<[u8; 32]> = store.leaves.iter().map(leaf_hash).collect();
+    if first > second || second > leaves.len() {
+        return None;
+    }
+    let mut out = Vec::new();
+    subproof(&leaves[..second], first, second, true, &mut out);
+    Some(out)
+}
+
+fn subproof(leaves: &[[u8; 32]], m: usize, n: usize, complete: bool, out: &mut Vec<[u8; 32]>) {
+    if m == n {
+        if !complete {
+            out.push(root_of(leaves));
+        }
+        return;
+    }
+    // An empty first tree proves nothing, and the split below would ask for the same
+    // (0, 1) subproblem forever. Stop here.
+    if m == 0 {
+        return;
+    }
+    // Largest power of two strictly smaller than n.
+    let mut k = 1usize;
+    while k << 1 < n {
+        k <<= 1;
+    }
+    if m <= k {
+        subproof(&leaves[..k], m, k, complete, out);
+        out.push(root_of(&leaves[k..n]));
+    } else {
+        subproof(&leaves[k..n], m - k, n - k, false, out);
+        out.push(root_of(&leaves[..k]));
+    }
+}
+
+/// The client side of the same rule, ported from the reference implementation
+/// (transparency-dev/merkle, `proof/verify.go`).
+///
+/// The RFC defines the proof; it does not spell out how to check one, and the "obvious"
+/// parity walk silently rejects valid proofs. This is the algorithm that is actually used
+/// by CT logs, checked here against every size pair the tests can reach and against the
+/// worked examples in RFC 6962 section 2.1.3.
+fn bit_len(x: u64) -> u32 {
+    64 - x.leading_zeros()
+}
+
+fn chain_inner(seed: [u8; 32], proof: &[[u8; 32]], index: u64) -> [u8; 32] {
+    let mut acc = seed;
+    for (i, h) in proof.iter().enumerate() {
+        acc = if (index >> i) & 1 == 0 {
+            node_hash(&acc, h)
+        } else {
+            node_hash(h, &acc)
+        };
+    }
+    acc
+}
+
+fn chain_inner_right(seed: [u8; 32], proof: &[[u8; 32]], index: u64) -> [u8; 32] {
+    let mut acc = seed;
+    for (i, h) in proof.iter().enumerate() {
+        if (index >> i) & 1 == 1 {
+            acc = node_hash(h, &acc);
+        }
+    }
+    acc
+}
+
+fn chain_border_right(seed: [u8; 32], proof: &[[u8; 32]]) -> [u8; 32] {
+    let mut acc = seed;
+    for h in proof {
+        acc = node_hash(h, &acc);
+    }
+    acc
+}
+
+fn root_from_subtree_consistency(
+    start: u64,
+    end: u64,
+    size: u64,
+    proof: &[[u8; 32]],
+    sub_root: &[u8; 32],
+) -> Option<[u8; 32]> {
+    if end == size {
+        let level = bit_len((end - 1) ^ start);
+        let index = start >> level;
+        let want = index.count_ones() as usize;
+        if proof.len() != want {
+            return None;
+        }
+        return Some(chain_border_right(*sub_root, proof));
+    }
+
+    let fork_level = bit_len((end - 1) ^ (size - 1));
+    let border = ((end - 1) >> fork_level).count_ones() as usize;
+    let shift = (end - start).trailing_zeros();
+    let inner = (fork_level - shift) as usize;
+
+    let (seed, p_start) = if (end - start) == 1u64 << shift {
+        (*sub_root, 0usize)
+    } else {
+        (*proof.first()?, 1usize)
+    };
+    if proof.len() != p_start + inner + border {
+        return None;
+    }
+    let proof = &proof[p_start..];
+    let mask = (end - 1) >> shift;
+
+    if p_start == 1 {
+        // Nodes in the proof that belong to the first tree must chain to its root.
+        let h = bit_len((end - 1) ^ start);
+        let sub_inner = (std::cmp::min(h, fork_level) as usize).checked_sub(shift as usize)?;
+        let sub_border =
+            border.saturating_sub((((end - 1) >> h).count_ones()) as usize);
+        if proof.len() < inner + sub_border {
+            return None;
+        }
+        let hash1 = chain_inner_right(seed, &proof[..sub_inner], mask);
+        let hash1 = chain_border_right(hash1, &proof[inner..inner + sub_border]);
+        if &hash1 != sub_root {
+            return None;
+        }
+    }
+
+    let hash2 = chain_inner(seed, &proof[..inner], mask);
+    Some(chain_border_right(hash2, &proof[inner..]))
+}
+
+pub fn verify_consistency(
+    first_size: usize,
+    first_root: &[u8; 32],
+    second_size: usize,
+    second_root: &[u8; 32],
+    proof: &[[u8; 32]],
+) -> bool {
+    if first_size > second_size {
+        return false;
+    }
+    if first_size == second_size {
+        return proof.is_empty() && first_root == second_root;
+    }
+    if first_size == 0 || proof.is_empty() {
+        return false;
+    }
+    match root_from_subtree_consistency(0, first_size as u64, second_size as u64, proof, first_root) {
+        Some(root) => &root == second_root,
+        None => false,
+    }
+}
+
+/// The root of the first `size` leaves — used to answer "is this the tree you saw?" when
+/// a client quotes a size rather than a root.
+pub fn root_at(size: usize) -> Option<Vec<u8>> {
+    let store = read_store();
+    if size > store.leaves.len() {
+        return None;
+    }
+    let hashes: Vec<[u8; 32]> = store.leaves.iter().take(size).map(leaf_hash).collect();
+    Some(root_of(&hashes).to_vec())
+}
+
 pub fn head() -> Option<Head> {
     read_store().head
 }
@@ -363,6 +560,80 @@ pub fn size() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hashes(n: usize) -> Vec<[u8; 32]> {
+        (0..n).map(|i| node_hash(&[(i & 0xff) as u8; 32], &[(i >> 8) as u8; 32])).collect()
+    }
+
+    /// Every pair of sizes must prove, and the proof must be exactly what the
+    /// client-side rule accepts — for the whole small range, not one example.
+    #[test]
+    fn consistency_holds_for_every_size_pair() {
+        for n in 1..=24usize {
+            let leaves = hashes(n);
+            // An empty log proves nothing and has nothing to prove against; a browser
+            // never pins a size-0 head, and verify_consistency says so.
+            for m in 1..=n {
+                let mut proof = Vec::new();
+                super::subproof(&leaves[..n], m, n, true, &mut proof);
+                let first_root = root_of(&leaves[..m]);
+                let second_root = root_of(&leaves[..n]);
+                assert!(
+                    verify_consistency(m, &first_root, n, &second_root, &proof),
+                    "size {m} -> {n} did not verify ({} nodes)",
+                    proof.len()
+                );
+            }
+        }
+    }
+
+    /// A proof that the log grew must not verify against a different earlier root:
+    /// that is precisely the rewound-history case this exists to catch.
+    #[test]
+    fn consistency_rejects_a_rewritten_past() {
+        let leaves = hashes(16);
+        let mut proof = Vec::new();
+        super::subproof(&leaves, 5, 16, true, &mut proof);
+        let honest = root_of(&leaves[..5]);
+
+        let mut rewritten = leaves.clone();
+        rewritten[2] = [0xaa; 32];
+        let rewritten_root = root_of(&rewritten[..5]);
+        let new_root = root_of(&leaves[..16]);
+
+        assert!(verify_consistency(5, &honest, 16, &new_root, &proof));
+        assert!(!verify_consistency(5, &rewritten_root, 16, &new_root, &proof));
+    }
+
+    /// Truncating or padding a proof must fail rather than pass by accident.
+    #[test]
+    fn consistency_rejects_damaged_proofs() {
+        let leaves = hashes(11);
+        let mut proof = Vec::new();
+        super::subproof(&leaves, 3, 11, true, &mut proof);
+        let first = root_of(&leaves[..3]);
+        let second = root_of(&leaves[..11]);
+        assert!(verify_consistency(3, &first, 11, &second, &proof));
+
+        let mut shortened = proof.clone();
+        shortened.pop();
+        assert!(!verify_consistency(3, &first, 11, &second, &shortened));
+
+        let mut flipped = proof.clone();
+        flipped[0] = [0x55; 32];
+        assert!(!verify_consistency(3, &first, 11, &second, &flipped));
+
+        assert!(!verify_consistency(11, &second, 3, &first, &proof));
+    }
+
+    /// Same size: only equal roots are consistent, and no proof is needed.
+    #[test]
+    fn consistency_at_equal_sizes_is_equality() {
+        let a = [1u8; 32];
+        let b = [2u8; 32];
+        assert!(verify_consistency(4, &a, 4, &a, &[]));
+        assert!(!verify_consistency(4, &a, 4, &b, &[]));
+    }
 
     /// One-off: record every account that already has a key. Run with
     /// `cargo test backfill_from_live_users -- --ignored --nocapture`.

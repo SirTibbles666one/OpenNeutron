@@ -598,6 +598,7 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     // no account here, and a proof only insiders can fetch proves nothing.
     router.add_route(Method::Get,       "/api/kt/head",                Open,           endpoints::keytransparency::head);
     router.add_route(Method::Post,      "/api/kt/proof",               Open,           endpoints::keytransparency::proof);
+    router.add_route(Method::Post,      "/api/kt/consistency",         Open,           endpoints::keytransparency::consistency);
     router.add_route(Method::Post,      "/api/email/sendencrypted",   Authenticated,  endpoints::email::send_encrypted);
     router.add_route(Method::Post,      "/api/email/sent/list",       Authenticated,  endpoints::email::list_sent_email_uids);
     router.add_route(Method::Post,      "/api/email/sent/recent",     Authenticated,  endpoints::email::list_recent_sent_email_uids);

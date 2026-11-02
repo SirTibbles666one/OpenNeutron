@@ -696,6 +696,16 @@ pub fn restore_with_recovery_key(
     // Same private key, newly wrapped: the public key is untouched, which is
     // exactly why previously received mail still decrypts.
     target.encrypted_private_key = Some(req.wrapped_key.trim().to_string());
+    // The quantum secret was wrapped with the password that no longer exists. If the
+    // recovery key carried it, re-wrap it; if it did not, say so in the response rather
+    // than leaving every hybrid message looking corrupt.
+    let mut pq_restored = false;
+    if let Some(wrapped_pq) = req.wrapped_pq_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        match crate::core::pqkeys::rewrap_secret(&username, wrapped_pq) {
+            Ok(()) => pq_restored = true,
+            Err(e) => log::warn!("[Recovery] quantum secret not re-wrapped for '{}': {}", username, e),
+        }
+    }
     target.revoke_existing_sessions();
 
     user_storage.update_user(target);
@@ -707,9 +717,10 @@ pub fn restore_with_recovery_key(
     let _ = store.mark_key_used(&username, now_secs());
     log::info!("[Recovery] Account '{}' restored with a recovery key", username);
 
-    let body = serde_json::to_vec(&MessageResponse {
-        message: "Account restored. Sign in with your new password.".into(),
-    })
+    let body = serde_json::to_vec(&serde_json::json!({
+        "message": "Account restored. Sign in with your new password.",
+        "pq_restored": pq_restored,
+    }))
     .unwrap();
     Response::from_data(body).with_status_code(200).with_header(json_header())
 }

@@ -767,11 +767,15 @@ pub fn get_public_keys(
                 });
                 let key_type = if pk.is_some() { "openneutron-1" } else { "none" };
                 let pq_public_key = pqkeys::get(username).map(|k| k.public_key);
+                // Sent with the key so a sender can check the directory instead of
+                // believing it. Absent only when the account has no key to log.
+                let proof = crate::core::keylog::proof_json(username);
                 result_map.insert(address.clone(), RecipientPublicKey {
                     address: address.clone(),
                     public_key: pk,
                     key_type: key_type.to_string(),
                     pq_public_key,
+                    proof,
                 });
             } else {
                 external_by_domain
@@ -785,6 +789,7 @@ pub fn get_public_keys(
                 public_key: None,
                 key_type: "none".to_string(),
                     pq_public_key: None,
+                    proof: None,
             });
         }
     }
@@ -803,6 +808,7 @@ pub fn get_public_keys(
                                     public_key: Some(kb),
                                     key_type: kt,
                     pq_public_key: None,
+                    proof: None,
                                 });
                             }
                             None => {
@@ -811,6 +817,7 @@ pub fn get_public_keys(
                                     public_key: None,
                                     key_type: "none".to_string(),
                     pq_public_key: None,
+                    proof: None,
                                 });
                             }
                         }
@@ -826,6 +833,7 @@ pub fn get_public_keys(
                     public_key: None,
                     key_type: "none".to_string(),
                     pq_public_key: None,
+                    proof: None,
                 });
             }
         }
@@ -837,6 +845,7 @@ pub fn get_public_keys(
             public_key: None,
             key_type: "none".to_string(),
                     pq_public_key: None,
+                    proof: None,
         })
     }).collect();
 

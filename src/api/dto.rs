@@ -455,6 +455,11 @@ pub struct RecipientPublicKey {
     /// possible where both halves exist, and a sender must never guess.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pq_public_key: Option<String>,
+    /// Key-transparency proof for this recipient: their leaf and the audit path
+    /// that binds it to a signed head. A sender that checks it is not trusting
+    /// this answer — that is the whole point of sending it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -684,6 +689,11 @@ pub struct RecoveryRestoreRequest {
     /// Private key re-wrapped under the new password.
     pub wrapped_key: String,
     pub kdf_salt: String,
+    /// The ML-KEM secret, re-wrapped under the new password. Absent when the recovery
+    /// key predates quantum protection — a recovery that restores RSA alone leaves
+    /// hybrid messages unreadable, so this is carried rather than assumed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrapped_pq_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -727,6 +737,7 @@ mod public_key_shape {
             public_key: Some("rsa".into()),
             key_type: "openneutron-1".into(),
             pq_public_key: pq.map(str::to_string),
+            proof: None,
         }
     }
 

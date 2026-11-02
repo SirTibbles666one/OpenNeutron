@@ -110,6 +110,16 @@ pub fn set(username: &str, public_key: &str, encrypted_private_key: &str) -> Res
     write_all(&all)
 }
 
+/// Re-wrap the secret half with a new password, keeping the same public key.
+///
+/// Used by recovery: the account's password changed, so the wrapping that protects
+/// the ML-KEM secret has to change with it or every hybrid message becomes unreadable
+/// — which is exactly what happened before this existed.
+pub fn rewrap_secret(username: &str, encrypted_private_key: &str) -> Result<(), String> {
+    let existing = get(username).ok_or_else(|| "no quantum key on file".to_string())?;
+    set(username, &existing.public_key, encrypted_private_key)
+}
+
 pub fn remove(username: &str) -> Result<(), String> {
     let mut all = read_all();
     if let Some(users) = all.get_mut("users").and_then(|u| u.as_object_mut()) {

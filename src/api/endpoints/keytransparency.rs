@@ -96,3 +96,78 @@ pub fn proof(
         None => json_response(json!({ "error": "no leaf for that account", "code": "no_leaf" }), 404),
     }
 }
+
+#[derive(Deserialize)]
+struct ConsistencyRequest {
+    first: u64,
+    second: u64,
+}
+
+/// POST /api/kt/consistency — proof that the tree at `second` still contains the tree at
+/// `first`.
+///
+/// This is the check a pinned head cannot do on its own. A browser that saw size 13 can
+/// only notice a shrink or a same-size change; a server that rewrites an old leaf and then
+/// grows past it looks exactly like normal operation. Here the client names the size it
+/// saw, and the proof either extends that history or does not.
+pub fn consistency(
+    request: &mut Request,
+    _user: Option<User>,
+    _user_storage: Arc<UserStorage>,
+    _email_storage: Arc<crate::core::email::EmailStorage>,
+) -> Response<Cursor<Vec<u8>>> {
+    let mut body = String::new();
+    if std::io::Read::read_to_string(request.as_reader(), &mut body).is_err() {
+        return json_response(json!({ "error": "unreadable body", "code": "bad_request" }), 400);
+    }
+    let req: ConsistencyRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(_) => return json_response(json!({ "error": "bad request", "code": "bad_request" }), 400),
+    };
+
+    let Some(head) = keylog::head() else {
+        return json_response(json!({ "error": "no log yet", "code": "no_log" }), 404);
+    };
+    if req.second != head.size {
+        // Only the current head can be answered for; a client should ask for what it sees.
+        return json_response(
+            json!({
+                "error": "that is not the current tree size",
+                "code": "not_current",
+                "size": head.size,
+            }),
+            409,
+        );
+    }
+    if req.first == 0 || req.first > req.second {
+        return json_response(
+            json!({ "error": "first must be at least 1 and no larger than second", "code": "bad_range" }),
+            400,
+        );
+    }
+
+    match keylog::consistency_proof(req.first as usize, req.second as usize) {
+        Some(proof) => {
+            let nodes: Vec<String> = proof.iter().map(|node| STANDARD.encode(node)).collect();
+            // Included for diagnostics and tests only: a client must verify against the
+            // root it pinned, never against one the server hands it now.
+            let first_root = keylog::root_at(req.first as usize)
+                .map(|root| STANDARD.encode(root))
+                .unwrap_or_default();
+            json_response(
+                json!({
+                    "first_size": req.first,
+                    "first_root": first_root,
+                    "second_size": head.size,
+                    "second_root": head.root,
+                    "alg": head.alg,
+                    "pk": head.pk,
+                    "sig": head.sig,
+                    "proof": nodes,
+                }),
+                200,
+            )
+        }
+        None => json_response(json!({ "error": "cannot prove that range", "code": "no_proof" }), 400),
+    }
+}
