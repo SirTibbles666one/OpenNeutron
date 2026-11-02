@@ -450,6 +450,11 @@ pub struct RecipientPublicKey {
     pub address: String,
     pub public_key: Option<String>,  // base64-encoded, None if user has no key or is external
     pub key_type: String,            // "none" for now (future: negotiated e2ee)
+    /// ML-KEM-768 encapsulation key, base64, for accounts that have one. Absent
+    /// means the sender must seal with RSA alone — the hybrid envelope is only
+    /// possible where both halves exist, and a sender must never guess.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pq_public_key: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -710,4 +715,35 @@ pub struct TwoFactorLoginRequest {
 #[derive(Debug, Serialize)]
 pub struct TwoFactorMessageResponse {
     pub message: String,
+}
+
+#[cfg(test)]
+mod public_key_shape {
+    use super::RecipientPublicKey;
+
+    fn key(pq: Option<&str>) -> RecipientPublicKey {
+        RecipientPublicKey {
+            address: "b@slothlee.xyz".into(),
+            public_key: Some("rsa".into()),
+            key_type: "openneutron-1".into(),
+            pq_public_key: pq.map(str::to_string),
+        }
+    }
+
+    /// An account with no quantum key must not be described as having one: a
+    /// sender that reads a missing field as "hybrid" would seal mail the
+    /// recipient could never open.
+    #[test]
+    fn a_recipient_without_pq_material_omits_the_field() {
+        let json = serde_json::to_string(&key(None)).unwrap();
+        assert!(!json.contains("pq_public_key"), "{json}");
+    }
+
+    /// The encapsulation key is public by construction; it travels so a sender
+    /// can seal to it without asking the server to.
+    #[test]
+    fn a_recipient_with_pq_material_carries_the_encapsulation_key() {
+        let json = serde_json::to_string(&key(Some("eks"))).unwrap();
+        assert!(json.contains("eks"), "{json}");
+    }
 }

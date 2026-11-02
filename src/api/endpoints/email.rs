@@ -3,7 +3,7 @@ use tiny_http::{Request, Response};
 use std::sync::Arc;
 use std::io::Cursor;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use crate::core::{UserStorage, EmailStorage, User};
+use crate::core::{pqkeys, UserStorage, EmailStorage, User};
 use crate::utils::unix_to_iso;
 use crate::api::dto::{
     GetEmailRequest, EmailBytesResponse, GetEmailsBulkRequest, EmailsBulkResponse,
@@ -766,10 +766,12 @@ pub fn get_public_keys(
                     u.publicKey.map(|k| STANDARD.encode(&k.0))
                 });
                 let key_type = if pk.is_some() { "openneutron-1" } else { "none" };
+                let pq_public_key = pqkeys::get(username).map(|k| k.public_key);
                 result_map.insert(address.clone(), RecipientPublicKey {
                     address: address.clone(),
                     public_key: pk,
                     key_type: key_type.to_string(),
+                    pq_public_key,
                 });
             } else {
                 external_by_domain
@@ -782,6 +784,7 @@ pub fn get_public_keys(
                 address: address.clone(),
                 public_key: None,
                 key_type: "none".to_string(),
+                    pq_public_key: None,
             });
         }
     }
@@ -799,6 +802,7 @@ pub fn get_public_keys(
                                     address: addr,
                                     public_key: Some(kb),
                                     key_type: kt,
+                    pq_public_key: None,
                                 });
                             }
                             None => {
@@ -806,6 +810,7 @@ pub fn get_public_keys(
                                     address: addr,
                                     public_key: None,
                                     key_type: "none".to_string(),
+                    pq_public_key: None,
                                 });
                             }
                         }
@@ -820,6 +825,7 @@ pub fn get_public_keys(
                     address: addr.clone(),
                     public_key: None,
                     key_type: "none".to_string(),
+                    pq_public_key: None,
                 });
             }
         }
@@ -830,6 +836,7 @@ pub fn get_public_keys(
             address: addr.clone(),
             public_key: None,
             key_type: "none".to_string(),
+                    pq_public_key: None,
         })
     }).collect();
 
