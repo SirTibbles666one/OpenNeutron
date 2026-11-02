@@ -28,7 +28,14 @@ use std::path::PathBuf;
 
 use crate::utils::cryptography::PublicKey;
 
-pub const HYBRID_MAGIC: [u8; 4] = [0x53, 0x4c, 0x51, 0x01]; // "SLQ" + version 1
+/// "SLQ" + version 1: the two secrets were combined through HKDF and nothing else.
+/// Mail sealed this way exists and must keep opening, so the reader keeps it.
+pub const HYBRID_MAGIC_V1: [u8; 4] = [0x53, 0x4c, 0x51, 0x01];
+/// "SLQ" + version 2: the same combination, with both ciphertexts hashed into the
+/// derivation so halves from different messages cannot be spliced together.
+pub const HYBRID_MAGIC: [u8; 4] = [0x53, 0x4c, 0x51, 0x02];
+/// Domain separator for the version-2 transcript digest.
+const BINDING_LABEL: &[u8] = b"sloth-mail/atrest/v2/binding";
 pub const MLKEM_CT_LEN: usize = 1088;
 
 fn sidecar() -> PathBuf {
@@ -113,7 +120,7 @@ pub fn remove(username: &str) -> Result<(), String> {
 
 /// Derive the data key from both secrets. Bind the account name so a blob
 /// replayed onto another account derives a different key and fails to open.
-fn combine(rsa_seed: &[u8], mlkem_secret: &[u8], username: &str) -> [u8; 32] {
+fn combine(rsa_seed: &[u8], mlkem_secret: &[u8], username: &str, bind: Option<(&[u8], &[u8])>) -> [u8; 32] {
     use hkdf::Hkdf;
     use sha2::Sha256;
     let mut ikm = Vec::with_capacity(rsa_seed.len() + mlkem_secret.len());
@@ -121,7 +128,25 @@ fn combine(rsa_seed: &[u8], mlkem_secret: &[u8], username: &str) -> [u8; 32] {
     ikm.extend_from_slice(mlkem_secret);
     let hk = Hkdf::<Sha256>::new(Some(b"sloth-mail/atrest/v1"), &ikm);
     let mut out = [0u8; 32];
-    hk.expand(username.as_bytes(), &mut out)
+    // Version 2 binds the transcript. Hashed first because the two ciphertexts are
+    // 1600 bytes together and a derived key is 32 either way — and because a caller
+    // on the other side has the same 32 bytes to reproduce.
+    let info: Vec<u8> = match bind {
+        Some((rsa_ct, mlkem_ct)) => {
+            use sha2::Digest;
+            let mut hasher = Sha256::new();
+            hasher.update(BINDING_LABEL);
+            hasher.update(rsa_ct);
+            hasher.update(mlkem_ct);
+            let digest = hasher.finalize();
+            let mut v = Vec::with_capacity(username.len() + digest.len());
+            v.extend_from_slice(username.as_bytes());
+            v.extend_from_slice(&digest);
+            v
+        }
+        None => username.as_bytes().to_vec(),
+    };
+    hk.expand(&info, &mut out)
         .expect("32 bytes is a valid HKDF output length");
     out
 }
@@ -170,7 +195,7 @@ pub fn encrypt_hybrid(
         return Err(format!("unexpected ML-KEM ciphertext length {}", mlkem_ct.len()));
     }
 
-    let key_bytes = combine(&rsa_seed, ss.as_slice(), username);
+    let key_bytes = combine(&rsa_seed, ss.as_slice(), username, Some((&rsa_ct, &mlkem_ct)));
     let mut nonce_bytes = [0u8; 12];
     rng.fill_bytes(&mut nonce_bytes);
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
@@ -192,7 +217,9 @@ pub fn encrypt_hybrid(
 }
 
 pub fn is_hybrid(message_key: &[u8]) -> bool {
-    message_key.len() > 4 && message_key[..4] == HYBRID_MAGIC
+    message_key.len() > 4
+        && message_key[..3] == HYBRID_MAGIC[..3]
+        && (message_key[3] == 1 || message_key[3] == 2)
 }
 
 /// What sealed a stored message key.
@@ -207,6 +234,8 @@ pub enum Envelope {
     Legacy,
     /// "SLQ" + version 1 — RSA-OAEP seed and an ML-KEM-768 ciphertext.
     HybridV1,
+    /// "SLQ" + version 2 — the same, with both ciphertexts bound into the key.
+    HybridV2,
     /// "SLQ" + a version this build does not know.
     Unknown(u8),
 }
@@ -215,6 +244,7 @@ pub fn classify(message_key: &[u8]) -> Envelope {
     if message_key.len() > 4 && message_key[..3] == HYBRID_MAGIC[..3] {
         return match message_key[3] {
             1 => Envelope::HybridV1,
+            2 => Envelope::HybridV2,
             other => Envelope::Unknown(other),
         };
     }
@@ -223,20 +253,24 @@ pub fn classify(message_key: &[u8]) -> Envelope {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify, Envelope, HYBRID_MAGIC};
+    use super::{classify, Envelope, HYBRID_MAGIC, HYBRID_MAGIC_V1};
 
     /// The version byte decides what a stored key is. A legacy key has no magic at
     /// all; a newer one must be reported as newer rather than read as legacy, because
     /// reading it as legacy would decrypt garbage and blame the account's key.
     #[test]
-    fn classify_names_the_three_cases() {
+    fn classify_names_the_four_cases() {
         let mut v1 = vec![0u8; 32];
-        v1[..4].copy_from_slice(&HYBRID_MAGIC);
+        v1[..4].copy_from_slice(&HYBRID_MAGIC_V1);
         assert_eq!(classify(&v1), Envelope::HybridV1);
 
         let mut v2 = v1.clone();
-        v2[3] = 2;
-        assert_eq!(classify(&v2), Envelope::Unknown(2));
+        v2[..4].copy_from_slice(&HYBRID_MAGIC);
+        assert_eq!(classify(&v2), Envelope::HybridV2);
+
+        let mut v3 = v1.clone();
+        v3[3] = 3;
+        assert_eq!(classify(&v3), Envelope::Unknown(3));
 
         let legacy = vec![0x41u8; 256];
         assert_eq!(classify(&legacy), Envelope::Legacy);
@@ -299,12 +333,34 @@ mod tests {
         let ct = ml_kem::Ciphertext::<MlKem768>::try_from(mlkem_ct)
             .map_err(|_| "bad mlkem ciphertext".to_string())?;
         let ss = fx.dk.decapsulate(&ct);
-        let key_bytes = combine(&rsa_seed, ss.as_slice(), username);
+        let key_bytes = combine(&rsa_seed, ss.as_slice(), username, Some((&rsa_ct, &mlkem_ct)));
 
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
         cipher
             .decrypt(Nonce::from_slice(&data[..12]), &data[12..])
             .map_err(|_| "aes-gcm: authentication failed".to_string())
+    }
+
+    /// Emit a fixed vector so the browser's implementation can be checked against this
+    /// one. Two implementations that merely agree with themselves agree with nothing:
+    /// the combiner has to produce the same 32 bytes on both sides, and only a shared
+    /// vector proves it. Ignored in normal runs; regenerate with
+    /// `cargo test print_interop_vector -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn print_interop_vector() {
+        use rsa::pkcs8::EncodePrivateKey;
+        let fx = fixture();
+        let public = PublicKey(fx.rsa_public_der.clone());
+        let (envelope, data) = encrypt_hybrid(&public, &fx.ek_b64, b"interop check", "bob").unwrap();
+        let private_der = fx.rsa_private.to_pkcs8_der().unwrap();
+        let json = serde_json::json!({
+            "rsa_private_der": STANDARD.encode(private_der.as_bytes()),
+            "mlkem_secret": STANDARD.encode(fx.dk.to_bytes().as_slice()),
+            "envelope": STANDARD.encode(&envelope),
+            "data": STANDARD.encode(&data),
+        });
+        println!("INTEROP_JSON {}", json);
     }
 
     #[test]

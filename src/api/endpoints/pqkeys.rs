@@ -142,7 +142,7 @@ pub fn migration(
             .map(pqkeys::classify)
             .unwrap_or(pqkeys::Envelope::Legacy);
         match (&email.message_key, kind) {
-            (Some(_), pqkeys::Envelope::HybridV1) => sealed += 1,
+            (Some(_), pqkeys::Envelope::HybridV1) | (Some(_), pqkeys::Envelope::HybridV2) => sealed += 1,
             (Some(_), pqkeys::Envelope::Unknown(_)) => unknown += 1,
             _ => {}
         }
