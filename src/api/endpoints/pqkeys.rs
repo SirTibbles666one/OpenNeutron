@@ -8,6 +8,7 @@
 //! this server stores ciphertext exactly as it does for the RSA key. It cannot
 //! decapsulate anything, which is the whole point.
 
+use crate::core::keylog;
 use serde::Deserialize;
 use serde_json::json;
 use std::io::Cursor;
@@ -188,4 +189,31 @@ pub fn remove(
     }
     log::info!("[pq] '{}' removed post-quantum protection", user.username);
     out(200, serde_json::to_vec(&json!({ "enabled": false })).unwrap_or_default())
+}
+
+/// GET /api/evidence/pq — public, read-only, and deliberately dull.
+///
+/// It answers how many accounts carry a post-quantum key, how many exist, and the size of the key
+/// directory. It never answers *which* accounts, never returns key material, and never scans a
+/// mailbox — the sealed-message figure in the UI stays a dated, per-mailbox number because a
+/// site-wide one would mean walking every store on every request.
+pub fn evidence(
+    _request: &mut Request,
+    _user: Option<User>,
+    users: Arc<UserStorage>,
+    _email_storage: Arc<EmailStorage>,
+) -> Response<Cursor<Vec<u8>>> {
+    let accounts_with_keys = users.key_inventory().len();
+    let accounts_total = users.count();
+    let head_size = keylog::size();
+    // No chrono in this tree: the timestamp is Unix seconds, which every consumer can format.
+    let as_of = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let body = format!(
+        "{{\"accounts_with_keys\":{},\"accounts_total\":{},\"kt_head_size\":{},\"as_of_epoch\":{}}}",
+        accounts_with_keys, accounts_total, head_size, as_of
+    );
+    out(200, body.into_bytes())
 }

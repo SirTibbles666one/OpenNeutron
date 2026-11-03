@@ -349,6 +349,15 @@ impl UserStorage {
         }
     }
 
+    /// How many accounts exist. A number, never a list: the public evidence endpoint must not be
+    /// able to enumerate users even if someone changes its formatting later.
+    pub fn count(&self) -> usize {
+        match self.users.lock() {
+            Ok(map) => map.len(),
+            Err(_) => 0,
+        }
+    }
+
     pub fn new(filename: String, domain: String) -> Self {
         UserStorage {
             users: Mutex::new(HashMap::new()),
