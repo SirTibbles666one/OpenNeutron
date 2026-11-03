@@ -122,6 +122,9 @@ fn main() -> Result<()> {
         thread::spawn(move || loop {
             crate::core::ephemeral::sweep(&sweeper_users, &sweeper_mail);
             crate::core::notes::sweep();
+            // Sessions age out on their own: the registry had no upper bound, so a
+            // copied cookie outlived the device it was copied from.
+            crate::core::sessions::sweep(crate::core::arrival::now());
             crate::core::arrival::sweep_old(crate::core::arrival::now());
             thread::sleep(std::time::Duration::from_secs(60));
         });

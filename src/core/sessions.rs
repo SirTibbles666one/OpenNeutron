@@ -26,6 +26,33 @@ pub struct SessionRecord {
     pub last_seen_at: u64,
 }
 
+/// How long a session may live at all, counted from when it was created.
+///
+/// The registry had no upper bound, so `sessions.json` only ever grew and a cookie
+/// copied off a phone kept working until that account happened to sign out. Thirty
+/// days is long enough that nobody is signed out mid-use and short enough that a
+/// forgotten session on a sold laptop stops being a key.
+pub const MAX_AGE_SECS: u64 = 30 * 24 * 3600;
+
+/// How long a session may sit unused. A session that has not been seen in a
+/// fortnight is abandoned, not in use: refusing it costs the owner one sign-in and
+/// costs an attacker holding a stale cookie the whole session.
+pub const IDLE_SECS: u64 = 14 * 24 * 3600;
+
+/// Has this session outlived either limit?
+///
+/// `created_at` is authoritative for the absolute cap; `last_seen_at` for idleness.
+/// A record written before either field existed carries 0 and is judged on
+/// `created_at` alone, which for those is also 0 — so they age out immediately
+/// rather than living forever.
+fn expired(record: &SessionRecord, now: u64) -> bool {
+    let age = now.saturating_sub(record.created_at);
+    if record.created_at == 0 || age >= MAX_AGE_SECS {
+        return true;
+    }
+    now.saturating_sub(record.last_seen_at) >= IDLE_SECS
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionStore {
     #[serde(default)]
@@ -161,19 +188,26 @@ pub fn validate(username: &str, sid: Option<&str>, issued_at: u64, token: &str, 
         return true;
     };
 
-    let Some(record) = guard.entries.get_mut(sid) else {
+    // Cloned rather than borrowed mutably: an aged-out session has to be removed
+    // while we are looking at it, and holding a mutable borrow of the entry would
+    // forbid exactly that.
+    let Some(record) = guard.entries.get(sid).cloned() else {
         return false;
     };
-    if record.username != username {
+    if record.username != username || record.token_hash != hash_token(token) {
+        // Same id with a different token, or another account's id: forged.
         return false;
     }
-    if record.token_hash != hash_token(token) {
-        // Same id, different token: treat as forged.
+    if expired(&record, now) {
+        guard.entries.remove(sid);
+        let _ = save(&guard);
         return false;
     }
     // Keep last-seen fresh without writing on every single request.
     if now.saturating_sub(record.last_seen_at) >= 60 {
-        record.last_seen_at = now;
+        if let Some(live) = guard.entries.get_mut(sid) {
+            live.last_seen_at = now;
+        }
         let _ = save(&guard);
     }
     true
@@ -243,5 +277,90 @@ pub fn clear_user(username: &str) {
     guard.revoked_before.remove(username);
     if let Err(e) = save(&guard) {
         log::warn!("[Sessions] Could not clear sessions for '{}': {}", username, e);
+    }
+}
+
+/// Drop every session that has aged out. Returns how many were removed.
+///
+/// Called from the same minute-ticker that sweeps ephemeral notes and held mail, so
+/// the file shrinks on its own instead of waiting for the account to come back.
+pub fn sweep_in(store: &mut SessionStore, now: u64) -> usize {
+    let before = store.entries.len();
+    store.entries.retain(|_, r| !expired(r, now));
+    before.saturating_sub(store.entries.len())
+}
+
+pub fn sweep(now: u64) -> usize {
+    let removed = {
+        let mut guard = match store().lock() {
+            Ok(g) => g,
+            Err(_) => return 0,
+        };
+        let removed = sweep_in(&mut guard, now);
+        if removed > 0 {
+            let _ = save(&guard);
+        }
+        removed
+    };
+    if removed > 0 {
+        println!("sessions: dropped {removed} aged-out session(s)");
+    }
+    removed
+}
+
+
+#[cfg(test)]
+mod expiry_tests {
+    use super::*;
+
+    fn rec(created_at: u64, last_seen_at: u64) -> SessionRecord {
+        SessionRecord {
+            username: "tibs".into(),
+            token_hash: "h".into(),
+            user_agent: String::new(),
+            ip: String::new(),
+            created_at,
+            last_seen_at,
+        }
+    }
+
+    #[test]
+    fn a_fresh_session_is_alive() {
+        let now = 1_800_000_000u64;
+        assert!(!expired(&rec(now - 60, now - 60), now));
+    }
+
+    #[test]
+    fn the_absolute_cap_refuses_a_session_that_is_still_in_use() {
+        let now = 1_800_000_000u64;
+        let active = rec(now - MAX_AGE_SECS, now); // used a second ago, created too long ago
+        assert!(expired(&active, now));
+        // One second younger is still allowed.
+        assert!(!expired(&rec(now - MAX_AGE_SECS + 1, now), now));
+    }
+
+    #[test]
+    fn idleness_refuses_a_session_inside_the_absolute_cap() {
+        let now = 1_800_000_000u64;
+        assert!(expired(&rec(now - 3600, now - IDLE_SECS), now));
+        assert!(!expired(&rec(now - 3600, now - IDLE_SECS + 1), now));
+    }
+
+    #[test]
+    fn a_record_with_no_timestamps_is_not_immortal() {
+        assert!(expired(&rec(0, 0), 1_800_000_000));
+    }
+
+    #[test]
+    fn the_sweep_removes_only_the_ones_that_aged_out() {
+        let now = 1_800_000_000u64;
+        let mut store = SessionStore::default();
+        store.entries.insert("live".into(), rec(now - 600, now - 60));
+        store.entries.insert("old".into(), rec(now - MAX_AGE_SECS, now - 60));
+        store.entries.insert("idle".into(), rec(now - 600, now - IDLE_SECS));
+        let removed = sweep_in(&mut store, now);
+        assert_eq!(removed, 2);
+        assert!(store.entries.contains_key("live"));
+        assert_eq!(store.entries.len(), 1);
     }
 }
