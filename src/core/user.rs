@@ -592,12 +592,24 @@ impl UserStorage {
     }
 
     
+    /// File a message into every group whose sender rules name its sender.
     pub fn add_email_to_matching_groups(&self, username: &str, email_uid: u128, sender_email: &str) {
-        let sender_lower = sender_email.to_lowercase();
+        self.file_by_senders(username, email_uid, &[sender_email]);
+    }
+
+    /// File a message by any of the addresses it came from. Arriving mail has two: the envelope
+    /// sender (MAIL FROM) and the From header. They differ for most bulk and list mail (a bounce
+    /// address in the envelope, the brand in From), and people write rules for the one they can
+    /// see, so matching only the envelope left those rules doing nothing.
+    pub fn file_by_senders(&self, username: &str, email_uid: u128, senders: &[&str]) {
+        let candidates: Vec<String> = senders.iter().filter_map(|s| sender_address(s)).collect();
+        if candidates.is_empty() {
+            return;
+        }
         let mut users = self.lock_users();
         if let Some(user) = users.get_mut(username) {
             for group in &mut user.groups {
-                if group.filter_addresses.iter().any(|addr| addr == &sender_lower) {
+                if group.filter_addresses.iter().any(|addr| candidates.iter().any(|c| c == addr)) {
                     if !group.email_uids.contains(&email_uid) {
                         group.email_uids.push(email_uid);
                     }
@@ -727,6 +739,21 @@ impl UserStorage {
         Ok(())
     }
 
+}
+
+/// The bare, lowercased address in a sender value: `Name <a@b>`, `<a@b>` or `a@b`.
+pub fn sender_address(value: &str) -> Option<String> {
+    let value = value.trim();
+    let inner = match (value.rfind('<'), value.rfind('>')) {
+        (Some(open), Some(close)) if open < close => &value[open + 1..close],
+        _ => value,
+    };
+    let address = inner.trim().trim_matches('"').trim();
+    if address.contains('@') && !address.contains(char::is_whitespace) {
+        Some(address.to_lowercase())
+    } else {
+        None
+    }
 }
 
 pub fn get_or_init_storage(filename: String, domain: String) -> UserStorage {
