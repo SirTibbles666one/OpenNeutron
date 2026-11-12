@@ -138,7 +138,7 @@ fn html(body: String, status: u16) -> Response<Cursor<Vec<u8>>> {
 
 /// Where the link should point. `server.public_url` wins because the API is
 /// reached through a proxy whose Host header is not always the public name.
-fn base_url(request: &Request) -> String {
+pub(crate) fn base_url(request: &Request) -> String {
     if let Some(url) = crate::config::get().server.public_url.as_ref() {
         let trimmed = url.trim().trim_end_matches('/');
         if !trimmed.is_empty() {

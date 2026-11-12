@@ -499,7 +499,11 @@ pub fn send_recovery(
     }
 
     let domain = crate::utils::emailutils::get_server_domain();
-    let link = format!("https://{}/reset?t={}", domain, token);
+    // The reset page belongs to the web app, which is served at server.public_url.
+    // Built from the mail domain alone the link pointed at the marketing site,
+    // which has no /reset page, so every recovery link 404'd.
+    let base = crate::api::endpoints::notes::base_url(request);
+    let link = format!("{}/reset?t={}", base, token);
     let body = format!(
         "Someone requested a password reset for the mailbox '{username}' on {domain}.\n\n         Open this link to choose a new password:\n\n  {link}\n\n         The link works once and expires in {ttl} minutes.\n\n         Important: your password is what unlocks the private key that decrypts your\
          mailbox. Setting a new password creates a new key, so mail encrypted to the\
