@@ -415,9 +415,20 @@ fn handle_smtp_connection(
                     Email::new_e2ee(received.clone(), &user)
                 } else {
                     debug!("[SMTP] Standard email for '{}' - server-side encrypting", username);
-                    let mut e = Email::new(received.clone(), &user);
-                    e.secure = true;
-                    e
+                    // No plaintext fallback: if the wrap fails the message is held like a
+                    // no-key message, so it is delivered when the mailbox can be opened again
+                    // rather than sitting readable on disk.
+                    match Email::try_new(received.clone(), &user) {
+                        Ok(e) => e,
+                        Err(err) => {
+                            error!("[SMTP] User '{}' could not be encrypted for: {} - holding the message", username, err);
+                            match core::pending::queue(username, &received) {
+                                Ok(path) => info!("[SMTP] Held message at '{}'", path.display()),
+                                Err(e) => error!("[SMTP] Could not hold the message for '{}': {}", username, e),
+                            }
+                            continue;
+                        }
+                    }
                 };
                 let blob_path = format!("data/blobs/{}.bin", email.uid);
                 debug!("[SMTP] Saving email blob to '{}'", blob_path);
@@ -447,6 +458,47 @@ fn handle_smtp_connection(
                             email.uid,
                             &[received.from.as_str(), header_from],
                         );
+
+                        // Rspamd decided this is spam but not enough to refuse it
+                        // (action "add header", score 6..15 by default). File it in
+                        // Junk rather than the inbox: a warning header nobody reads
+                        // is not a decision. Nothing here inspects the body — the
+                        // verdict arrives as a header the milter already wrote, so
+                        // the server still never reads what it stores.
+                        // Rspamd says "X-Spam: Yes" once a message crosses the
+                        // add-header threshold and it still let it through. The
+                        // explicit action header is honoured too, because that is
+                        // where a future rewrite-subject rule would land.
+                        let spam_action = received
+                            .headers
+                            .iter()
+                            .find(|(name, _)| name.eq_ignore_ascii_case("x-rspamd-action"))
+                            .map(|(_, value)| value.trim().to_ascii_lowercase())
+                            .unwrap_or_default();
+                        let spam_flag = received
+                            .headers
+                            .iter()
+                            .find(|(name, _)| name.eq_ignore_ascii_case("x-spam"))
+                            .map(|(_, value)| value.trim().to_ascii_lowercase())
+                            .unwrap_or_default();
+                        let is_spam = spam_flag == "yes"
+                            || spam_action.contains("add header")
+                            || spam_action.contains("rewrite subject");
+                        if is_spam {
+                            user_storage.mutate_user(username, |u| {
+                                let idx = match u.groups.iter().position(|g| g.title.eq_ignore_ascii_case("Junk")) {
+                                    Some(i) => i,
+                                    None => {
+                                        u.groups.push(core::Group::new("Junk".to_string(), Vec::new()));
+                                        u.groups.len() - 1
+                                    }
+                                };
+                                if !u.groups[idx].email_uids.contains(&email.uid) {
+                                    u.groups[idx].email_uids.push(email.uid);
+                                }
+                            });
+                            info!("[SMTP] {} scored '{}' - filed in Junk", email.uid, spam_action);
+                        }
 
                         // Remember the door it came through, so a reply can go back
                         // out from the same address rather than the owner's real one.
@@ -508,6 +560,12 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Post, "/api/user/webauthn/register/begin", Authenticated, endpoints::webauthn::register_begin);
     router.add_route(Method::Post, "/api/user/webauthn/register/finish", Authenticated, endpoints::webauthn::register_finish);
     router.add_route(Method::Post, "/api/user/webauthn/remove", Authenticated, endpoints::webauthn::remove);
+
+    // Signed-in devices. The handlers and the settings screen both existed before
+    // the routes did, so the page asked a URL nothing answered.
+    router.add_route(Method::Get,  "/api/user/sessions",            Authenticated, endpoints::sessions::list);
+    router.add_route(Method::Post, "/api/user/sessions/revoke",     Authenticated, endpoints::sessions::revoke);
+    router.add_route(Method::Post, "/api/user/sessions/revoke-all", Authenticated, endpoints::sessions::revoke_all);
     router.add_route(Method::Get,  "/api/signup/challenge", Open, endpoints::user::signup_challenge);
     router.add_route(Method::Post, "/api/user/register",  Open, endpoints::user::register);
     router.add_route(Method::Post, "/api/user/delete-account", Authenticated, endpoints::user::delete_own_account);
