@@ -213,7 +213,11 @@ pub fn login_with_code(
         .filter(|v| !v.trim().is_empty())
         .or_else(|| request.remote_addr().map(|a| a.ip().to_string()))
         .unwrap_or_default();
+    let new_device = crate::core::sessions::is_new_device(&username, &user_agent, &ip);
     crate::core::sessions::record(&session_id, &username, &token, &user_agent, &ip, now_unix());
+    if new_device {
+        crate::core::login_notice::maybe_send(&username, &user_agent, &ip, &user_storage, &email_storage);
+    }
     ratelimit::record_success(&user_key);
 
     let public_key = user.publicKey.as_ref().map(|pk| {

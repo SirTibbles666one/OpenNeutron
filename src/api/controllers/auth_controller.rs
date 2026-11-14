@@ -114,7 +114,12 @@ pub fn authenticate_with_client(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    // Read before recording: once the row exists the device is no longer new.
+    let new_device = crate::core::sessions::is_new_device(username, user_agent, ip);
     crate::core::sessions::record(&session_id, username, &token, user_agent, ip, issued);
+    if new_device {
+        crate::core::login_notice::maybe_send(username, user_agent, ip, user_storage, email_storage);
+    }
     let force_reset = user.needs_force_reset();
     let public_key = user.publicKey.as_ref().map(|pk| STANDARD.encode(&pk.0));
     let unread_emails = email_storage.count_unread(&crate::core::trash::inbox_ids(&user));

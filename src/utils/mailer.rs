@@ -7,7 +7,7 @@
 use crate::smtp::EmailSendingFSM;
 use crate::utils::emailutils;
 
-fn rfc2822_now() -> String {
+pub fn rfc2822_now() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

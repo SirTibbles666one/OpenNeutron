@@ -228,6 +228,52 @@ pub fn list(username: &str) -> Vec<(String, SessionRecord)> {
     rows
 }
 
+/// True when this browser and network have never held a session for the account.
+///
+/// Deliberately coarse. The browser family, not its version, because an update
+/// is not a new device; and the network, not the exact address, because a phone
+/// that moves between cells is still the same phone — a notice for every
+/// morning commute would train the reader to ignore the one that matters.
+pub fn is_new_device(username: &str, user_agent: &str, ip: &str) -> bool {
+    let guard = match store().lock() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    let device = device_key(user_agent);
+    let net = network_key(ip);
+    !guard
+        .entries
+        .values()
+        .any(|r| r.username == username && device_key(&r.user_agent) == device && network_key(&r.ip) == net)
+}
+
+/// The browser family, lowercased. Unknown agents fall back to the first 24
+/// characters so two different clients do not collapse into one.
+fn device_key(user_agent: &str) -> String {
+    let lower = user_agent.trim().to_ascii_lowercase();
+    for needle in ["firefox", "edg/", "opr/", "opera", "crios", "chrome", "safari"] {
+        if lower.contains(needle) {
+            return needle.trim_end_matches('/').to_string();
+        }
+    }
+    lower.chars().take(24).collect()
+}
+
+/// IPv4 to its /24, IPv6 to its /64, everything else verbatim.
+fn network_key(ip: &str) -> String {
+    let trimmed = ip.trim();
+    if trimmed.contains(':') {
+        let hextets: Vec<&str> = trimmed.split(':').take(4).collect();
+        return hextets.join(":");
+    }
+    let parts: Vec<&str> = trimmed.split('.').collect();
+    if parts.len() == 4 {
+        format!("{}.{}.{}", parts[0], parts[1], parts[2])
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Revoke one session. Refuses to remove a record belonging to another account.
 pub fn revoke(username: &str, sid: &str) -> bool {
     let mut guard = match store().lock() {
@@ -362,5 +408,32 @@ mod expiry_tests {
         assert_eq!(removed, 2);
         assert!(store.entries.contains_key("live"));
         assert_eq!(store.entries.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{device_key, network_key};
+
+    #[test]
+    fn a_browser_update_is_not_a_new_device() {
+        let before = "Mozilla/5.0 (X11; Linux x86_64) Chrome/120.0 Safari/537.36";
+        let after = "Mozilla/5.0 (X11; Linux x86_64) Chrome/131.0 Safari/537.36";
+        assert_eq!(device_key(before), device_key(after));
+    }
+
+    #[test]
+    fn a_different_browser_family_is() {
+        assert_ne!(device_key("Mozilla/5.0 Firefox/128.0"), device_key("Mozilla/5.0 Chrome/131.0"));
+    }
+
+    #[test]
+    fn addresses_are_grouped_by_network() {
+        assert_eq!(network_key("81.2.69.14"), network_key("81.2.69.99"));
+        assert_ne!(network_key("81.2.69.14"), network_key("81.2.70.14"));
+        // Same /64: the two hextets after the /64 are the host's business.
+        assert_eq!(network_key("2a01:4f8:1c0c:5c6b::1"), network_key("2a01:4f8:1c0c:5c6b:1::7"));
+        // Different /64: a different network, so a new device notice.
+        assert_ne!(network_key("2a01:4f8:1c0c:5c6b::1"), network_key("2a01:4f8:1c0c:9f2e::1"));
     }
 }

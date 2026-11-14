@@ -13,6 +13,7 @@ pub mod recovery;
 pub mod twofactor;
 
 pub mod sessions;
+pub mod login_notice;
 
 pub mod pending;
 pub use pending as pending_mail;
