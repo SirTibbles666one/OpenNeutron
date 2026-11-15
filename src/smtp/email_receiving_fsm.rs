@@ -496,12 +496,23 @@ impl EmailReceivingFSM {
             if !lower[at + 1..].eq_ignore_ascii_case(&self.server_name) {
                 return Some(format!("550 5.7.1 Relay denied for <{}>", rcpt));
             }
+            // Which account would this actually land in? An address, an alias
+            // and a role address all resolve to a mailbox, and it is that
+            // mailbox that decides whether the address still takes mail.
+            let local = &lower[..at];
+            let destination = self
+                .user_storage
+                .get_user(local)
+                .map(|u| u.username.to_ascii_lowercase())
+                .or_else(|| crate::core::aliases::resolve(local))
+                .or_else(|| self.user_storage.role_owner(local));
+            if let Some(account) = destination.as_deref() {
+                if crate::core::suspended::is_suspended(account) {
+                    return Some(format!("550 5.2.1 Mailbox <{}> is switched off", rcpt));
+                }
+            }
             if self.reject_unknown {
-                let local = &lower[..at];
-                if self.user_storage.get_user(local).is_none()
-                    && crate::core::aliases::resolve(local).is_none()
-                    && self.user_storage.role_owner(local).is_none()
-                {
+                if destination.is_none() {
                     return Some(format!("550 5.1.1 No such mailbox <{}>", rcpt));
                 }
             }

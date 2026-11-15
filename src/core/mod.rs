@@ -23,6 +23,7 @@ pub mod sendlimit;
 pub mod signup_ip;
 
 pub mod pending_users;
+pub mod suspended;
 
 pub mod aliases;
 pub mod arrival;
