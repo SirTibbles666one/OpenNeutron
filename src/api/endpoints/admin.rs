@@ -74,6 +74,11 @@ fn erase_account(user_storage: &UserStorage, email_storage: &EmailStorage, usern
         Ok(_) => {}
         Err(e) => log::warn!("[Admin] Could not remove aliases for '{}': {}", username, e),
     }
+    // A suspension is about one account, not one name: if this account is ever
+    // created again it must not inherit it.
+    if let Err(e) = crate::core::suspended::set(username, false, "system", "account deleted") {
+        log::warn!("[Admin] Could not clear the suspension for '{}': {}", username, e);
+    }
     // A post-quantum key left behind is worse than clutter: if the name is ever
     // reused, new mail would be sealed to a decapsulation key nobody holds.
     if let Err(e) = crate::core::pqkeys::remove(username) {
@@ -160,9 +165,17 @@ pub fn list_users(
         .into_iter()
         .map(|entry| entry.username)
         .collect();
+    let switched_off: std::collections::HashSet<String> = crate::core::suspended::list()
+        .into_iter()
+        .map(|entry| entry.username)
+        .collect();
     let dtos: Vec<UserDto> = all_users
         .iter()
-        .map(|u| UserDto::new(u, &user_storage.domain).with_pending(queued.contains(&u.username)))
+        .map(|u| {
+            UserDto::new(u, &user_storage.domain)
+                .with_pending(queued.contains(&u.username))
+                .with_suspended(switched_off.contains(&u.username))
+        })
         .collect();
     let total = dtos.len();
     let body = serde_json::to_vec(&AdminUsersResponse { users: dtos, total }).unwrap();
@@ -688,4 +701,77 @@ pub fn deny_pending(
     })
     .unwrap();
     Response::from_data(msg).with_status_code(200).with_header(json_header())
+}
+
+#[derive(Deserialize)]
+pub struct SuspendRequest {
+    pub username: String,
+    #[serde(default)]
+    pub suspended: bool,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// Switch an account off, or back on.
+///
+/// Nothing is deleted: the mailbox, the key and the messages stay, so lifting
+/// this returns the account exactly as it was. The account cannot be the
+/// caller's own, because an operator who locks themselves out of the panel has
+/// no way back in short of a shell on the host.
+pub fn suspend(
+    request: &mut Request,
+    user: Option<User>,
+    user_storage: Arc<UserStorage>,
+    _email_storage: Arc<EmailStorage>,
+) -> Response<Cursor<Vec<u8>>> {
+    let caller = match require_admin(user) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let req: SuspendRequest = match read_json_body(request) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let username = req.username.trim().to_lowercase();
+    if username.is_empty() {
+        return error(400, "username_required", "Which account?");
+    }
+    if username == caller.username.to_ascii_lowercase() {
+        return error(
+            409,
+            "cannot_suspend_self",
+            "You cannot switch off the account you are signed in as",
+        );
+    }
+    if user_storage.get_user(&username).is_none() {
+        return error(404, "user_not_found", "No such account");
+    }
+
+    match crate::core::suspended::set(&username, req.suspended, &caller.username, &req.reason) {
+        Ok(state) => {
+            if state {
+                log::info!(
+                    "[Admin] '{}' suspended by '{}'{}",
+                    username,
+                    caller.username,
+                    if req.reason.trim().is_empty() { String::new() } else { format!(": {}", req.reason.trim()) }
+                );
+            } else {
+                log::info!("[Admin] '{}' switched back on by '{}'", username, caller.username);
+            }
+            Response::from_data(
+                serde_json::to_vec(&json!({
+                    "username": username,
+                    "suspended": state,
+                }))
+                .unwrap_or_default(),
+            )
+            .with_status_code(200)
+            .with_header(json_header())
+        }
+        Err(e) => {
+            log::error!("[Admin] Could not change suspension for '{}': {}", username, e);
+            error(500, "store_failed", "Could not change that account")
+        }
+    }
 }

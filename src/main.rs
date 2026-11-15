@@ -391,6 +391,13 @@ fn handle_smtp_connection(
                 warn!("[SMTP] User '{}' not found - skipping '{}'", username, recipient);
             }
             Some(user) => {
+                if core::suspended::is_suspended(username) {
+                    info!(
+                        "[SMTP] '{}' is switched off - not delivering '{}'",
+                        username, recipient
+                    );
+                    continue;
+                }
                 debug!("[SMTP] User '{}' found (uid={}, has_public_key={})",
                     username, user.uid, user.publicKey.is_some());
 
@@ -597,6 +604,7 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Post,      "/api/admin/users/recovery-address", Admin, endpoints::admin::set_recovery_address);
     router.add_route(Method::Post,      "/api/admin/users/send-recovery",   Admin, endpoints::admin::send_recovery);
     router.add_route(Method::Post,      "/api/admin/users/admin",       Admin, endpoints::admin::set_admin);
+            router.add_route(Method::Post,      "/api/admin/users/suspend", Authenticated, endpoints::admin::suspend);
     router.add_route(Method::Get,       "/api/admin/disk-usage",        Admin, endpoints::admin::disk_usage);
 
     // Self-registration approval queue: accounts created without an invite code.

@@ -83,6 +83,9 @@ pub struct UserDto {
     pub is_admin: bool,
     /// True while the account is queued for approval and cannot sign in.
     pub pending: bool,
+    /// True while an operator has switched the account off. The mailbox and
+    /// its messages are untouched; sign-in and delivery are refused.
+    pub suspended: bool,
     /// Address a recovery link can be sent to; None when the account has none.
     pub recovery_email: Option<String>,
 }
@@ -98,6 +101,7 @@ impl UserDto {
             email_count: u.emailIds.len(),
             is_admin: u.is_admin,
             pending: false,
+            suspended: false,
             recovery_email: crate::core::recovery::store().get(&u.username).email,
         }
     }
@@ -109,6 +113,12 @@ impl UserDto {
     /// sync on the host.
     pub fn with_pending(mut self, pending: bool) -> Self {
         self.pending = pending;
+        self
+    }
+
+    /// Mark the account as switched off by an operator.
+    pub fn with_suspended(mut self, suspended: bool) -> Self {
+        self.suspended = suspended;
         self
     }
 }

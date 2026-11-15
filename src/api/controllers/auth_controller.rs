@@ -73,6 +73,18 @@ pub fn authenticate_with_client(
     // before token issuance (otherwise the account is approved by being able to
     // log in at all). A pending account is never locked out by this - the login
     // handler only counts 401s against the rate limiter.
+    // Switched off by an operator. Like the pending check, this sits after the
+    // password: telling anyone who asks that a name is suspended would confirm
+    // the account exists.
+    if crate::core::suspended::is_suspended(username) {
+        log::info!("[Auth] '{}' is suspended; refusing sign-in", username);
+        return Err(AuthError::new(
+            403,
+            "account_suspended",
+            "This account has been switched off",
+        ));
+    }
+
     if crate::core::pending_users::contains(username) {
         log::info!("[Auth] '{}' is waiting for account approval", username);
         return Err(AuthError::new(
