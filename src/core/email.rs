@@ -34,40 +34,57 @@ pub struct Email {
     pub message_key: Option<Vec<u8>>,
 }
 
+/// Why a message could not be stored encrypted.
+#[derive(Debug)]
+pub enum EncryptError {
+    /// The account has no public key yet, so there is nothing to encrypt to.
+    NoKey,
+    /// A key exists and the wrap still failed.
+    Failed(String),
+}
+
+impl std::fmt::Display for EncryptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EncryptError::NoKey => write!(f, "account has no public key"),
+            EncryptError::Failed(e) => write!(f, "encryption failed: {}", e),
+        }
+    }
+}
+
 impl Email {
-    pub fn new(received_email: ReceivedEmail, user: &User) -> Self {
+    /// Encrypt a message for at-rest storage, or fail.
+    ///
+    /// This deliberately has no fallback. A mailbox that promises the server
+    /// cannot read your mail must not store a message in the clear because a
+    /// key was missing or a wrap failed — and it must never hand back an
+    /// `Email` whose `secure` flag says otherwise. Callers either hold the
+    /// message (the pending queue) or refuse it (import).
+    pub fn try_new(received_email: ReceivedEmail, user: &User) -> std::result::Result<Self, EncryptError> {
         let raw_bytes = received_email.raw_data;
 
         // Server-side at-rest encryption using split hybrid RSA-OAEP + AES-256-GCM.
         // message_key stores the RSA-encrypted AES key; raw_data stores the AES ciphertext.
-        let (message_key, encrypted_data, is_secure) = if let Some(pk) = &user.publicKey {
-            // Hybrid when the account has a post-quantum key: breaking RSA alone
-            // must not open stored mail. Falls back to RSA-only for accounts
-            // that have not enabled it yet, which is why old and new mail can
-            // sit in the same mailbox without a migration.
-            let hybrid = crate::core::pqkeys::get(&user.username);
-            let split = match hybrid {
-                Some(keys) => crate::core::pqkeys::encrypt_hybrid(pk, &keys.public_key, &raw_bytes, &user.username)
-                    .or_else(|e| {
-                        log::warn!("[pq] hybrid wrap failed for '{}': {} — falling back to RSA", user.username, e);
-                        cryptography::encrypt_split(pk, &raw_bytes).map_err(|e| e)
-                    }),
-                None => cryptography::encrypt_split(pk, &raw_bytes),
-            };
-            match split {
-                Ok((k, d)) => (Some(k), d, true),
-                Err(e) => {
-                    eprintln!("[Email] Encryption failed for user '{}': {} - storing plaintext", user.username, e);
-                    (None, raw_bytes, false)
-                }
-            }
-        } else {
-            (None, raw_bytes, false)
-        };
+        let pk = user.publicKey.as_ref().ok_or(EncryptError::NoKey)?;
 
-        Email {
+        // Hybrid when the account has a post-quantum key: breaking RSA alone
+        // must not open stored mail. Falls back to RSA-only for accounts
+        // that have not enabled it yet, which is why old and new mail can
+        // sit in the same mailbox without a migration.
+        let hybrid = crate::core::pqkeys::get(&user.username);
+        let split = match hybrid {
+            Some(keys) => crate::core::pqkeys::encrypt_hybrid(pk, &keys.public_key, &raw_bytes, &user.username)
+                .or_else(|e| {
+                    log::warn!("[pq] hybrid wrap failed for '{}': {} — falling back to RSA", user.username, e);
+                    cryptography::encrypt_split(pk, &raw_bytes)
+                }),
+            None => cryptography::encrypt_split(pk, &raw_bytes),
+        };
+        let (message_key, encrypted_data) = split.map_err(|e| EncryptError::Failed(e.to_string()))?;
+
+        Ok(Email {
             uid: emailutils::generate_email_uid(user),
-            secure: is_secure,
+            secure: true,
             read: false,
             starred: false,
             e2ee: false,
@@ -79,8 +96,8 @@ impl Email {
                 .map(|pk| cryptography::hash_public_key(pk))
                 .unwrap_or(Sha256Hash([0u8; 32])),
             raw_data: encrypted_data,
-            message_key,
-        }
+            message_key: Some(message_key),
+        })
     }
 
     pub fn new_e2ee(received_email: ReceivedEmail, user: &User) -> Self {

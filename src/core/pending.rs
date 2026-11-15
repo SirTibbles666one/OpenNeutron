@@ -142,7 +142,10 @@ fn deliver_one(
     received.raw_data = bytes;
     received.is_e2ee = record.is_e2ee;
 
-    let email = crate::core::Email::new(received, user);
+    // A held message that still cannot be encrypted stays held. It must never
+    // land in the mailbox in the clear as a "successful" delivery.
+    let email = crate::core::Email::try_new(received, user)
+        .map_err(|e| format!("cannot encrypt for '{}': {}", username, e))?;
     email_storage.save_email(&email).map_err(|e| e.to_string())?;
 
     user_storage.mutate_user(username, |u| {

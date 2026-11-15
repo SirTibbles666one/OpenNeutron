@@ -256,8 +256,16 @@ pub fn message(
     received.dkim_status = "imported".to_string();
     received.is_e2ee = false;
 
-    let mut email = Email::new(received, &user);
-    email.secure = true;
+    let mut email = match Email::try_new(received, &user) {
+        Ok(e) => e,
+        Err(err) => {
+            return json_error(
+                500,
+                "encryption_failed",
+                &format!("Could not encrypt this message for at-rest storage: {}", err),
+            )
+        }
+    };
     // Keep the archive's own chronology. A future date is not a date.
     if let Some(when) = req.date_unix {
         let now = std::time::SystemTime::now()

@@ -270,11 +270,12 @@ pub fn list_email_uids(
     // Trashed messages stay indexed (so the Trash view can read them) but leave the folder, and
     // the page is measured against what remains after they are taken out.
     let trashed = crate::core::trash::trashed_uids(&user.username);
+    let snoozed = crate::core::snooze::snoozed_uids(&user.username, crate::core::snooze::now());
     let live: Vec<u128> = user
         .emailIds
         .iter()
         .copied()
-        .filter(|id| !trashed.contains(id))
+        .filter(|id| !trashed.contains(id) && !snoozed.contains(id))
         .filter(|id| in_mailbox(&user, *id, &request_body.addresses))
         .collect();
 
@@ -476,9 +477,10 @@ pub fn list_recent_email_uids(
     
     let limit = clamp_page_limit(Some(req.limit), DEFAULT_PAGE, MAX_PAGE);
     let trashed = crate::core::trash::trashed_uids(&user.username);
+    let snoozed = crate::core::snooze::snoozed_uids(&user.username, crate::core::snooze::now());
 
     let uids: Vec<u128> = user.emailIds.iter().rev()
-        .filter(|id| !trashed.contains(id))
+        .filter(|id| !trashed.contains(id) && !snoozed.contains(id))
         .filter(|id| in_mailbox(&user, **id, &req.addresses))
         .skip(req.offset)
         .take(limit)

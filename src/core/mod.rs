@@ -26,6 +26,7 @@ pub mod suspended;
 
 pub mod aliases;
 pub mod mailboxes;
+pub mod snooze;
 pub mod arrival;
 pub mod scheduled;
 pub mod ephemeral;

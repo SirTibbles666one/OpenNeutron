@@ -649,6 +649,9 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Post,      "/api/email/restore",         Authenticated,  endpoints::trash::restore_email);
     router.add_route(Method::Post,      "/api/email/trash/list",      Authenticated,  endpoints::trash::list_trash);
     router.add_route(Method::Post,      "/api/email/trash/empty",     Authenticated,  endpoints::trash::empty_trash);
+    router.add_route(Method::Post,      "/api/email/snooze",           Authenticated,  endpoints::snooze::snooze_email);
+    router.add_route(Method::Post,      "/api/email/unsnooze",         Authenticated,  endpoints::snooze::unsnooze_email);
+    router.add_route(Method::Post,      "/api/email/snoozed",          Authenticated,  endpoints::snooze::list_snoozed);
 
     router.add_route(Method::Get,       "/api/group/list",            Authenticated,  endpoints::group::list_groups);
     router.add_route(Method::Post,      "/api/group/create",          Authenticated,  endpoints::group::create_group);

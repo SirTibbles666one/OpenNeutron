@@ -6,6 +6,7 @@ pub mod sessions;
 pub mod admin;
 pub mod aliases;
 pub mod mailboxes;
+pub mod snooze;
 pub mod push;
 pub mod scheduled;
 pub mod email;
