@@ -26,6 +26,7 @@ pub mod pending_users;
 pub mod suspended;
 
 pub mod aliases;
+pub mod mailboxes;
 pub mod arrival;
 pub mod scheduled;
 pub mod ephemeral;

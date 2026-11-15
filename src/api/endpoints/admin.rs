@@ -69,6 +69,10 @@ fn erase_account(user_storage: &UserStorage, email_storage: &EmailStorage, usern
     // A push subscription is a way to reach a device. Nothing should be able to
     // reach it once the account is gone.
     crate::core::push::purge_user(username);
+    match crate::core::mailboxes::purge(username) {
+        n if n > 0 => log::info!("[Admin] Removed {} mailbox definition(s) for {}", n, username),
+        _ => {}
+    }
     match crate::core::aliases::purge(username) {
         Ok(n) if n > 0 => log::info!("[Admin] Removed {} alias(es) for '{}'", n, username),
         Ok(_) => {}

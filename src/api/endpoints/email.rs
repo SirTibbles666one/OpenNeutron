@@ -218,6 +218,34 @@ pub fn email_flags(
     Response::from_data(body).with_status_code(200).with_header(json_header())
 }
 
+/// Whether a message belongs to the mailbox being read.
+///
+/// `None` means every message. The account's own address means mail that arrived with no
+/// alias recorded, which is how delivery stores mail sent to `<username>@domain`.
+fn in_mailbox(user: &User, uid: u128, wanted: &Option<Vec<String>>) -> bool {
+    let Some(list) = wanted else { return true };
+    if list.is_empty() {
+        return true;
+    }
+    let dom = crate::config::get().server.domain.trim_start_matches('@').to_ascii_lowercase();
+    let own = format!("{}@{}", user.username.to_ascii_lowercase(), dom);
+    let arrived = crate::core::arrival::get(uid).map(|a| a.to_ascii_lowercase());
+    list.iter().any(|address| {
+        let address = address.trim().to_ascii_lowercase();
+        if address.is_empty() {
+            return false;
+        }
+        // The account's own address means mail that arrived with no alias recorded.
+        if address == own {
+            return arrived.is_none();
+        }
+        match arrived.as_ref() {
+            Some(local) => *local == address || format!("{local}@{dom}") == address,
+            None => false,
+        }
+    })
+}
+
 pub fn list_email_uids(
     request: &mut Request,
     user: Option<User>,
@@ -247,6 +275,7 @@ pub fn list_email_uids(
         .iter()
         .copied()
         .filter(|id| !trashed.contains(id))
+        .filter(|id| in_mailbox(&user, *id, &request_body.addresses))
         .collect();
 
     let total = live.len();
@@ -450,6 +479,7 @@ pub fn list_recent_email_uids(
 
     let uids: Vec<u128> = user.emailIds.iter().rev()
         .filter(|id| !trashed.contains(id))
+        .filter(|id| in_mailbox(&user, **id, &req.addresses))
         .skip(req.offset)
         .take(limit)
         .copied()
