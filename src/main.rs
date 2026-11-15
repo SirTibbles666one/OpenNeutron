@@ -415,9 +415,20 @@ fn handle_smtp_connection(
                     Email::new_e2ee(received.clone(), &user)
                 } else {
                     debug!("[SMTP] Standard email for '{}' - server-side encrypting", username);
-                    let mut e = Email::new(received.clone(), &user);
-                    e.secure = true;
-                    e
+                    // No plaintext fallback: if the wrap fails the message is held like a
+                    // no-key message, so it is delivered when the mailbox can be opened again
+                    // rather than sitting readable on disk.
+                    match Email::try_new(received.clone(), &user) {
+                        Ok(e) => e,
+                        Err(err) => {
+                            error!("[SMTP] User '{}' could not be encrypted for: {} - holding the message", username, err);
+                            match core::pending::queue(username, &received) {
+                                Ok(path) => info!("[SMTP] Held message at '{}'", path.display()),
+                                Err(e) => error!("[SMTP] Could not hold the message for '{}': {}", username, e),
+                            }
+                            continue;
+                        }
+                    }
                 };
                 let blob_path = format!("data/blobs/{}.bin", email.uid);
                 debug!("[SMTP] Saving email blob to '{}'", blob_path);
@@ -575,6 +586,7 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Post,      "/api/aliases",             Authenticated, endpoints::aliases::create);
     router.add_route(Method::Post,      "/api/aliases/disable",     Authenticated, endpoints::aliases::disable);
     router.add_route(Method::Post,      "/api/aliases/delete",      Authenticated, endpoints::aliases::delete);
+    router.add_route(Method::Post,      "/api/aliases/target",      Authenticated, endpoints::aliases::target);
 
     // Administrators only. These routes act on *other* accounts, so a valid
     // session is not enough - the router enforces 'is_admin' before dispatching.

@@ -34,6 +34,9 @@ struct AliasRow {
     created_at: u64,
     disabled_at: Option<u64>,
     received: u64,
+    /// Where the mail lands. Normally the owner; another mailbox when pointed.
+    delivers_to: String,
+    delivers_to_self: bool,
 }
 
 fn domain() -> String {
@@ -53,13 +56,19 @@ pub fn list(
     let dom = domain();
     let mut rows: Vec<AliasRow> = aliases::list(&user.username)
         .into_iter()
-        .map(|(local, a)| AliasRow {
-            address: format!("{}@{}", local, dom),
-            local,
-            label: a.label,
-            created_at: a.created_at,
-            disabled_at: a.disabled_at,
-            received: a.received,
+        .map(|(local, a)| {
+            // Read the landing account before `label` is moved out of the record.
+            let landing = a.delivers_to().to_string();
+            AliasRow {
+                address: format!("{}@{}", local, dom),
+                local,
+                label: a.label,
+                created_at: a.created_at,
+                disabled_at: a.disabled_at,
+                received: a.received,
+                delivers_to: format!("{}@{}", landing, dom),
+                delivers_to_self: landing.eq_ignore_ascii_case(&user.username),
+            }
         })
         .collect();
     rows.sort_by_key(|r| r.created_at);
@@ -184,6 +193,88 @@ pub fn delete(
         Err(e) => {
             log::error!("[Aliases] delete failed: {}", e);
             notify(500, "store_failed", "Could not delete that address")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct TargetRequest {
+    /// The alias's local part, as returned by `GET /api/aliases`.
+    pub local: String,
+    /// The mailbox the mail should land in. Empty, or the caller's own name,
+    /// means "back to me".
+    #[serde(default)]
+    pub target: String,
+    /// The password of the mailbox being targeted, hashed the same way login
+    /// hashes it. It is the proof that the caller holds that mailbox too: an
+    /// address that delivers into someone else's inbox is a way to aim mail at
+    /// a stranger, so pointing an alias takes that mailbox's own credential.
+    #[serde(default)]
+    pub password: String,
+}
+
+pub fn target(
+    request: &mut Request,
+    user: Option<User>,
+    user_storage: Arc<UserStorage>,
+    _email_storage: Arc<EmailStorage>,
+) -> Response<Cursor<Vec<u8>>> {
+    let user = match user {
+        Some(u) => u,
+        None => return notify(401, "unauthorized", "Unauthorized"),
+    };
+    let req: TargetRequest = match read_json_body(request) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let dom = domain();
+    let want = req.target.trim().to_ascii_lowercase();
+    let home = want.is_empty() || want == user.username.to_ascii_lowercase();
+
+    if !home {
+        let other = match user_storage.get_user(&want) {
+            Some(u) => u,
+            None => return notify(404, "no_such_mailbox", "There is no mailbox with that name"),
+        };
+        if crate::core::pending_users::contains(&want) {
+            return notify(403, "account_pending", "That mailbox has not been approved yet");
+        }
+        if !other.verify_password_peppered(&req.password) {
+            // One message for both wrong-password and no-such-mailbox would be
+            // worse here: the caller already knows the mailbox name, and the
+            // useful signal is which part they got wrong.
+            return notify(
+                403,
+                "wrong_password",
+                &format!("That password does not open {}", want),
+            );
+        }
+    }
+
+    let destination = if home { None } else { Some(want.as_str()) };
+    match aliases::set_target(&user.username, &req.local, destination) {
+        Ok(true) => {
+            let lands_on = destination.unwrap_or(user.username.as_str());
+            log::info!(
+                "[Aliases] {} points '{}' at '{}'",
+                user.username,
+                req.local,
+                lands_on
+            );
+            out(
+                200,
+                serde_json::to_vec(&json!({
+                    "local": req.local.to_ascii_lowercase(),
+                    "delivers_to": format!("{}@{}", lands_on, dom),
+                    "delivers_to_self": home,
+                }))
+                .unwrap_or_default(),
+            )
+        }
+        Ok(false) => notify(404, "not_found", "No such address on your account"),
+        Err(e) => {
+            log::error!("[Aliases] target change failed: {}", e);
+            notify(500, "store_failed", "Could not change where that address delivers")
         }
     }
 }

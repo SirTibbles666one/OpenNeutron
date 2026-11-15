@@ -40,6 +40,28 @@ pub struct Alias {
     /// Messages delivered through this address.
     #[serde(default)]
     pub received: u64,
+    /// The account that asked for this address. It is not always where the mail
+    /// goes: an alias can be pointed at another mailbox the same person holds.
+    /// Records written before this field existed have it empty, and an empty
+    /// owner means "the account in `username`", which is what they meant then.
+    #[serde(default)]
+    pub owner: String,
+}
+
+impl Alias {
+    /// Who owns this address. Legacy records fall back to the delivery account.
+    pub fn owner(&self) -> &str {
+        if self.owner.is_empty() {
+            &self.username
+        } else {
+            &self.owner
+        }
+    }
+
+    /// Where the mail lands.
+    pub fn delivers_to(&self) -> &str {
+        &self.username
+    }
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
@@ -113,7 +135,7 @@ pub fn list(username: &str) -> Vec<(String, Alias)> {
     load()
         .aliases
         .into_iter()
-        .filter(|(_, a)| a.username.eq_ignore_ascii_case(username))
+        .filter(|(_, a)| a.owner().eq_ignore_ascii_case(username))
         .collect()
 }
 
@@ -175,7 +197,7 @@ where
     let path = path();
     let mut store = read_at(&path);
 
-    let mine = store.aliases.values().filter(|a| a.username.eq_ignore_ascii_case(username)).count();
+    let mine = store.aliases.values().filter(|a| a.owner().eq_ignore_ascii_case(username)).count();
     if mine >= MAX_PER_ACCOUNT {
         return Err(CreateError::TooMany);
     }
@@ -205,6 +227,7 @@ where
         candidate.clone(),
         Alias {
             username: username.to_string(),
+            owner: username.to_string(),
             label: label.trim().chars().take(64).collect(),
             created_at: now(),
             disabled_at: None,
@@ -227,7 +250,7 @@ pub fn set_disabled(username: &str, local: &str, disabled: bool) -> io::Result<b
     let mut store = read_at(&path);
     let key = local.to_ascii_lowercase();
     let alias = match store.aliases.get_mut(&key) {
-        Some(a) if a.username.eq_ignore_ascii_case(username) => a,
+        Some(a) if a.owner().eq_ignore_ascii_case(username) => a,
         _ => return Ok(false),
     };
     alias.disabled_at = if disabled { Some(now()) } else { None };
@@ -243,12 +266,45 @@ pub fn purge(username: &str) -> io::Result<usize> {
     let path = path();
     let mut store = read_at(&path);
     let before = store.aliases.len();
-    store.aliases.retain(|_, a| !a.username.eq_ignore_ascii_case(username));
+
+    // Addresses the account asked for go with it.
+    store.aliases.retain(|_, a| !a.owner().eq_ignore_ascii_case(username));
+
+    // Addresses that were pointed at it belong to someone else, and that person
+    // still holds them: send them home instead of leaving mail aimed at a
+    // mailbox nobody can read.
+    for alias in store.aliases.values_mut() {
+        if alias.username.eq_ignore_ascii_case(username) {
+            alias.username = alias.owner().to_string();
+        }
+    }
+
     let removed = before - store.aliases.len();
     if removed > 0 {
         write_at(&path, &store)?;
     }
     Ok(removed)
+}
+
+/// Point an address at another mailbox, or back at its owner when `target` is
+/// None. Only the owner may do this; `false` means the address is not theirs.
+pub fn set_target(owner: &str, local: &str, target: Option<&str>) -> io::Result<bool> {
+    let _held = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let path = path();
+    let mut store = read_at(&path);
+    let key = local.to_ascii_lowercase();
+    let alias = match store.aliases.get_mut(&key) {
+        Some(a) if a.owner().eq_ignore_ascii_case(owner) => a,
+        _ => return Ok(false),
+    };
+    let destination = match target {
+        Some(t) if !t.trim().is_empty() => t.trim().to_ascii_lowercase(),
+        _ => owner.to_ascii_lowercase(),
+    };
+    alias.username = destination;
+    alias.owner = owner.to_string();
+    write_at(&path, &store)?;
+    Ok(true)
 }
 
 /// Remove an address outright. Mail already delivered stays in the mailbox.
@@ -258,7 +314,7 @@ pub fn delete(username: &str, local: &str) -> io::Result<bool> {
     let mut store = read_at(&path);
     let key = local.to_ascii_lowercase();
     match store.aliases.get(&key) {
-        Some(a) if a.username.eq_ignore_ascii_case(username) => {}
+        Some(a) if a.owner().eq_ignore_ascii_case(username) => {}
         _ => return Ok(false),
     }
     store.aliases.remove(&key);
@@ -280,6 +336,30 @@ mod tests {
         assert!(!valid_local("Upper"));
         assert!(!valid_local("sp ace"));
         assert!(!valid_local("admin"));
+    }
+
+    #[test]
+    fn a_record_from_before_ownership_owns_itself() {
+        let legacy: Alias = serde_json::from_str(
+            r#"{"username":"tibs","label":"shop","created_at":1,"received":3}"#,
+        )
+        .expect("legacy record parses");
+        assert_eq!(legacy.owner(), "tibs");
+        assert_eq!(legacy.delivers_to(), "tibs");
+    }
+
+    #[test]
+    fn an_alias_can_belong_to_one_account_and_deliver_to_another() {
+        let pointed = Alias {
+            username: "work".to_string(),
+            owner: "tibs".to_string(),
+            label: String::new(),
+            created_at: 1,
+            disabled_at: None,
+            received: 0,
+        };
+        assert_eq!(pointed.owner(), "tibs");
+        assert_eq!(pointed.delivers_to(), "work");
     }
 
     #[test]
