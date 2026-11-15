@@ -633,6 +633,7 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Post,      "/api/aliases",             Authenticated, endpoints::aliases::create);
     router.add_route(Method::Post,      "/api/aliases/disable",     Authenticated, endpoints::aliases::disable);
     router.add_route(Method::Post,      "/api/aliases/delete",      Authenticated, endpoints::aliases::delete);
+    router.add_route(Method::Post,      "/api/aliases/target",      Authenticated, endpoints::aliases::target);
 
     // Administrators only. These routes act on *other* accounts, so a valid
     // session is not enough - the router enforces 'is_admin' before dispatching.
