@@ -5,6 +5,7 @@ pub mod webauthn;
 pub mod sessions;
 pub mod admin;
 pub mod aliases;
+pub mod mailboxes;
 pub mod push;
 pub mod scheduled;
 pub mod email;

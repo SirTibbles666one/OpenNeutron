@@ -313,6 +313,9 @@ pub struct EmailUidsPage {
 pub struct ListEmailsRequest {
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    /// Read one mailbox: the addresses that feed it. Absent means every message.
+    #[serde(default)]
+    pub addresses: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -336,6 +339,9 @@ pub struct SetEmailBytesRequest {
 pub struct GetRecentEmailsRequest {
     pub offset: usize,
     pub limit: usize,
+    /// Read one mailbox: the addresses that feed it. Absent means every message.
+    #[serde(default)]
+    pub addresses: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
