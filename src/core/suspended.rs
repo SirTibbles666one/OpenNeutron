@@ -35,6 +35,9 @@ pub struct Suspended {
     pub by: String,
     #[serde(default)]
     pub reason: String,
+    /// Unix time the suspension lifts by itself. `None` means until someone lifts it.
+    #[serde(default)]
+    pub until: Option<u64>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -91,7 +94,30 @@ pub fn entry(username: &str) -> Option<Suspended> {
 
 /// Is this account switched off? Called on every login and every delivery.
 pub fn is_suspended(username: &str) -> bool {
-    read_at(&path()).entries.contains_key(&key(username))
+    active(username).is_some()
+}
+
+/// The live suspension for this account, if there is one. A suspension that has reached its
+/// end date is removed here rather than left to a sweeper: the account must be usable the
+/// moment it expires, not when a timer next runs.
+pub fn active(username: &str) -> Option<Suspended> {
+    let path = path();
+    let key_name = key(username);
+    let entry = read_at(&path).entries.get(&key_name).cloned()?;
+
+    if let Some(until) = entry.until {
+        if until <= now() {
+            // Take it out. A failure here is not fatal: the account is still treated as
+            // live below, and the next login or sweep will try again.
+            let _held = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut store = read_at(&path);
+            store.entries.remove(&key_name);
+            let _ = write_at(&path, &store);
+            log::info!("[Suspended] '{}' reached its end date and was lifted", key_name);
+            return None;
+        }
+    }
+    Some(entry)
 }
 
 /// Switch an account off, or back on. Returns the state afterwards.
@@ -100,6 +126,17 @@ pub fn is_suspended(username: &str) -> bool {
 /// the original operator, and only refreshes the reason: a repeat click must
 /// not make it look like the account was freshly caught.
 pub fn set(username: &str, suspend: bool, by: &str, reason: &str) -> io::Result<bool> {
+    set_until(username, suspend, by, reason, None)
+}
+
+/// As `set`, with an end date. `until` is unix seconds; `None` means no end.
+pub fn set_until(
+    username: &str,
+    suspend: bool,
+    by: &str,
+    reason: &str,
+    until: Option<u64>,
+) -> io::Result<bool> {
     let _held = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = path();
     let mut store = read_at(&path);
@@ -113,12 +150,15 @@ pub fn set(username: &str, suspend: bool, by: &str, reason: &str) -> io::Result<
                 if !reason.trim().is_empty() {
                     existing.reason = reason.trim().chars().take(200).collect();
                 }
+                existing.by = by.to_string();
+                existing.until = until;
             })
             .or_insert_with(|| Suspended {
                 username: key,
                 since: now(),
                 by: by.to_string(),
                 reason: reason.trim().chars().take(200).collect(),
+                until,
             });
     } else if store.entries.remove(&key).is_none() {
         // Nothing to lift; do not rewrite the file for a no-op.
@@ -167,7 +207,13 @@ mod tests {
             let mut store = Store::default();
             store.entries.insert(
                 "tibs".into(),
-                Suspended { username: "tibs".into(), since: 1, by: "ops".into(), reason: "probe".into() },
+                Suspended {
+                    username: "tibs".into(),
+                    since: 1,
+                    by: "ops".into(),
+                    reason: "probe".into(),
+                    until: None,
+                },
             );
             write_at(&p, &store).unwrap();
         }

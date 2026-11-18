@@ -76,12 +76,24 @@ pub fn authenticate_with_client(
     // Switched off by an operator. Like the pending check, this sits after the
     // password: telling anyone who asks that a name is suspended would confirm
     // the account exists.
-    if crate::core::suspended::is_suspended(username) {
+    if let Some(state) = crate::core::suspended::active(username) {
         log::info!("[Auth] '{}' is suspended; refusing sign-in", username);
+        // The person proved the password, so telling them the reason reveals nothing to a
+        // stranger — and a bare "switched off" is how a moderation decision looks like a bug
+        // from the other side. No reason recorded still produces a usable sentence.
+        let reason = if state.reason.trim().is_empty() {
+            String::new()
+        } else {
+            format!(" Reason given: {}.", state.reason.trim())
+        };
+        let until = match state.until {
+            Some(stamp) => format!(" It lifts on {}.", crate::utils::dates::utc_date(stamp)),
+            None => String::new(),
+        };
         return Err(AuthError::new(
             403,
             "account_suspended",
-            "This account has been switched off",
+            &format!("This account has been switched off.{reason}{until}"),
         ));
     }
 

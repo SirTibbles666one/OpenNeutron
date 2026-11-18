@@ -739,6 +739,10 @@ pub struct SuspendRequest {
     pub suspended: bool,
     #[serde(default)]
     pub reason: String,
+    /// How long the suspension lasts, in hours. Absent or null means until someone lifts it,
+    /// which is what every suspension before this field existed meant.
+    #[serde(default)]
+    pub hours: Option<u64>,
 }
 
 /// Switch an account off, or back on.
@@ -776,7 +780,11 @@ pub fn suspend(
         return error(404, "user_not_found", "No such account");
     }
 
-    match crate::core::suspended::set(&username, req.suspended, &caller.username, &req.reason) {
+    let until = req
+        .hours
+        .filter(|h| *h > 0)
+        .map(|h| crate::core::audit::now().saturating_add(h.saturating_mul(3600)));
+    match crate::core::suspended::set_until(&username, req.suspended, &caller.username, &req.reason, until) {
         Ok(state) => {
             if state {
                 log::info!(
@@ -791,11 +799,18 @@ pub fn suspend(
             // Outside the branch: switching an account OFF is the action that locks someone
             // out, so it must be recorded too — my first version put this in the `else` and
             // only unsuspensions were ever logged.
+            let mut detail = req.reason.trim().to_string();
+            if let (true, Some(end)) = (state, until) {
+                if !detail.is_empty() {
+                    detail.push_str("; ");
+                }
+                detail.push_str(&format!("until {}", crate::utils::dates::utc_date(end)));
+            }
             let _ = crate::core::audit::append(
                 &caller.username,
                 if state { "user.suspend" } else { "user.unsuspend" },
                 &username,
-                req.reason.trim(),
+                &detail,
             );
             Response::from_data(
                 serde_json::to_vec(&json!({
