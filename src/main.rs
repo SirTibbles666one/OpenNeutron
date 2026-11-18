@@ -547,6 +547,8 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Post, "/api/user/webauthn/register/begin", Authenticated, endpoints::webauthn::register_begin);
     router.add_route(Method::Post, "/api/user/webauthn/register/finish", Authenticated, endpoints::webauthn::register_finish);
     router.add_route(Method::Post, "/api/user/webauthn/remove", Authenticated, endpoints::webauthn::remove);
+    router.add_route(Method::Post, "/api/user/webauthn/reauth/begin", Authenticated, endpoints::webauthn::reauth_begin);
+    router.add_route(Method::Post, "/api/user/webauthn/reauth/finish", Authenticated, endpoints::webauthn::reauth_finish);
     router.add_route(Method::Get,  "/api/signup/challenge", Open, endpoints::user::signup_challenge);
     router.add_route(Method::Post, "/api/user/register",  Open, endpoints::user::register);
     router.add_route(Method::Post, "/api/user/delete-account", Authenticated, endpoints::user::delete_own_account);

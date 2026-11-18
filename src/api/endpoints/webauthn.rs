@@ -97,8 +97,47 @@ fn decode_field(body: &serde_json::Value, name: &str) -> Result<Vec<u8>, Resp> {
 
 /// A second factor must be proven before the key list can be changed, so a stolen
 /// session cannot enrol a key of its own and keep access after the password changes.
+
+/// Proof by an existing key, valid for five minutes.
+///
+/// In memory on purpose: a restart voids every grant, and a grant is worth less than the
+/// risk of persisting a "this session may skip the second factor" flag to disk.
+static REAUTH: std::sync::Mutex<Option<std::collections::HashMap<String, u64>>> =
+    std::sync::Mutex::new(None);
+
+const REAUTH_SECONDS: u64 = 300;
+
+fn grant_reauth(username: &str) {
+    if let Ok(mut guard) = REAUTH.lock() {
+        let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        map.insert(username.to_lowercase(), now() + REAUTH_SECONDS);
+    }
+}
+
+fn reauth_live(username: &str) -> bool {
+    match REAUTH.lock() {
+        Ok(mut guard) => {
+            let map = guard.get_or_insert_with(std::collections::HashMap::new);
+            match map.get(&username.to_lowercase()).copied() {
+                Some(until) if until > now() => true,
+                Some(_) => {
+                    map.remove(&username.to_lowercase());
+                    false
+                }
+                None => false,
+            }
+        }
+        Err(_) => false,
+    }
+}
+
 fn reauthenticated(username: &str, body: &serde_json::Value) -> Result<(), Resp> {
     if !twofactor::is_enabled(username) {
+        return Ok(());
+    }
+    // A key touched in the last five minutes is proof enough, and is the flow a hardware
+    // key owner expects: no app, no digits, one touch.
+    if reauth_live(username) {
         return Ok(());
     }
     let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
@@ -447,4 +486,98 @@ pub fn login_finish(
         two_factor_methods: Vec::new(),
         session_id: Some(session_id),
     }).unwrap())
+}
+
+/// POST /user/webauthn/reauth/begin — a challenge for an already-enrolled key.
+pub fn reauth_begin(
+    _request: &mut Request,
+    user: Option<User>,
+    _user_storage: Arc<UserStorage>,
+    _email_storage: Arc<EmailStorage>,
+) -> Resp {
+    let Some(user) = user else {
+        return error(401, "unauthorized", "Unauthorized");
+    };
+    let keys: Vec<serde_json::Value> = webauthn::list(&user.username)
+        .into_iter()
+        .map(|k| serde_json::json!({ "type": "public-key", "id": k.id }))
+        .collect();
+    if keys.is_empty() {
+        return error(
+            400,
+            "no_keys",
+            "There is no enrolled key to confirm with yet",
+        );
+    }
+    let (challenge_id, challenge) = issue_challenge(&user.username);
+    ok_json(serde_json::json!({
+        "challenge_id": challenge_id,
+        "options": {
+            "challenge": challenge,
+            "rpId": RP_ID,
+            "timeout": 120000,
+            "userVerification": user_verification(),
+            "allowCredentials": keys,
+        }
+    }))
+}
+
+/// POST /user/webauthn/reauth/finish — verify that assertion and allow a key change for five
+/// minutes. The signature is checked against a key already on this account, so a session that
+/// has been stolen but does not hold the hardware cannot use this path.
+pub fn reauth_finish(
+    request: &mut Request,
+    user: Option<User>,
+    _user_storage: Arc<UserStorage>,
+    _email_storage: Arc<EmailStorage>,
+) -> Resp {
+    let Some(user) = user else {
+        return error(401, "unauthorized", "Unauthorized");
+    };
+    let body: serde_json::Value = match read_json_body(request) {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    let challenge_id = body.get("challenge_id").and_then(|v| v.as_str()).unwrap_or("");
+    let Some(challenge) = take_challenge(challenge_id, &user.username) else {
+        return error(401, "stale_challenge", "That confirmation expired; try again");
+    };
+    let credential_id = body.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let Some(key) = webauthn::get(&user.username, credential_id) else {
+        log::warn!("[WebAuthn] reauth with a key not on '{}'", user.username);
+        return error(401, "unknown_key", "That security key is not registered on this account");
+    };
+    let client_data = match decode_field(&body, "clientDataJSON") {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let auth_data = match decode_field(&body, "authenticatorData") {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let signature = match decode_field(&body, "signature") {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let asserted = match webauthn::verify_assertion(
+        &key,
+        &client_data,
+        &auth_data,
+        &signature,
+        &challenge,
+        ORIGIN,
+        RP_ID,
+        &user.username,
+        now(),
+    ) {
+        Ok(a) => a,
+        Err(e) => {
+            log::warn!("[WebAuthn] reauth assertion refused for '{}': {}", user.username, e);
+            return error(401, "invalid_assertion", "That key could not be verified");
+        }
+    };
+    let _ = webauthn::record_use(&user.username, &key.id, asserted.sign_count, now());
+    grant_reauth(&user.username);
+    log::info!("[WebAuthn] '{}' confirmed a key change with an enrolled key", user.username);
+    ok_json(serde_json::json!({ "confirmed": true, "seconds": REAUTH_SECONDS }))
 }
