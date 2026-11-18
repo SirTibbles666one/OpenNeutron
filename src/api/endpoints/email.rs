@@ -483,9 +483,12 @@ pub fn list_recent_email_uids(
     let limit = clamp_page_limit(Some(req.limit), DEFAULT_PAGE, MAX_PAGE);
     let trashed = crate::core::trash::trashed_uids(&user.username);
     let snoozed = crate::core::snooze::snoozed_uids(&user.username, crate::core::snooze::now());
+    // Junk must be excluded here as well: this is the endpoint the app paints its first list
+    // from. Excluding it only from the paged list left convicted mail visible in the Inbox.
+    let junked = crate::core::junk::junked_uids(&user.username);
 
     let uids: Vec<u128> = user.emailIds.iter().rev()
-        .filter(|id| !trashed.contains(id) && !snoozed.contains(id))
+        .filter(|id| !trashed.contains(id) && !snoozed.contains(id) && !junked.contains(id))
         .filter(|id| in_mailbox(&user, **id, &req.addresses))
         .skip(req.offset)
         .take(limit)

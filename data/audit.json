@@ -287,6 +287,15 @@
       "detail": "Suspicious or illegal activity",
       "prev": "f326f028ea2598174ecc5be4a6bd285003034dceeb8afe5fe6501e37b9fe7c16",
       "hash": "24bb56caeb1bd1cc112cb7c6a0b840d39c8843d52b505295c1c644634a315a63"
+    },
+    {
+      "at": 1795023530,
+      "actor": "tibs",
+      "action": "audit.read",
+      "target": "",
+      "detail": "",
+      "prev": "24bb56caeb1bd1cc112cb7c6a0b840d39c8843d52b505295c1c644634a315a63",
+      "hash": "159cfa18dafcb4acaa1e78dfd5d97cd2cd2d3e87532a3c43bd26fb48acc44d05"
     }
   ]
 }
