@@ -1,3 +1,4 @@
+pub mod admin_health;
 pub mod audit_admin;
 pub mod spam;
 pub mod auth;

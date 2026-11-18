@@ -157,6 +157,26 @@ pub fn sweep(
     }
 }
 
+/// How much junk exists, across every account. The panel asks "is the filter filing
+/// anything"; a per-account breakdown belongs in People, not in a health card.
+#[derive(Serialize, Default)]
+pub struct Summary {
+    pub accounts: usize,
+    pub messages: usize,
+}
+
+pub fn summary_at(path: &Path) -> Summary {
+    let store = read_at(path);
+    Summary {
+        accounts: store.users.values().filter(|m| !m.is_empty()).count(),
+        messages: store.users.values().map(|m| m.len()).sum(),
+    }
+}
+
+pub fn summary() -> Summary {
+    summary_at(&path())
+}
+
 pub fn junked_uids(username: &str) -> HashSet<u128> {
     list(username).into_iter().map(|item| item.uid).collect()
 }

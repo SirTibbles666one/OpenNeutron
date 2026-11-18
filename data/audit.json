@@ -179,6 +179,15 @@
       "detail": "(cleared)",
       "prev": "7825eca413f35c4b2bdb1e00a4bb85534168adf57ac6ff784a6a86c9b88f86ac",
       "hash": "1f41c4a8b1df2c2497874a647d2a471d9730153f000fe5bf025b3d4a71b35785"
+    },
+    {
+      "at": 1795017576,
+      "actor": "tibs",
+      "action": "audit.read",
+      "target": "",
+      "detail": "",
+      "prev": "1f41c4a8b1df2c2497874a647d2a471d9730153f000fe5bf025b3d4a71b35785",
+      "hash": "5ac358608eb8ebf8743b012d16b1c969efecc4404e67ef8c5582263af5cf93b6"
     }
   ]
 }
