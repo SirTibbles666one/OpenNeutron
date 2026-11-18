@@ -470,6 +470,30 @@ fn handle_smtp_connection(
                             &[received.from.as_str(), header_from],
                         );
 
+                        // The filter's verdict, acted on at the only moment it is available.
+                        // rspamd writes `X-Spam: Yes` at or above its add_header threshold (6);
+                        // such a message is filed as junk rather than trusted to a header the
+                        // reader never sees. Rejecting at SMTP stays the server's job for the
+                        // obvious cases (score 15+), which never reach this code.
+                        let convicted = received
+                            .headers
+                            .iter()
+                            .find(|(name, _)| name.eq_ignore_ascii_case("x-spam"))
+                            .map(|(_, value)| value.trim().eq_ignore_ascii_case("yes"))
+                            .unwrap_or(false);
+                        if convicted {
+                            match crate::core::junk::add(username, email.uid) {
+                                Ok(()) => info!(
+                                    "[SMTP] Filed uid={} for '{}' as junk on the filter's verdict",
+                                    email.uid, username
+                                ),
+                                Err(e) => warn!(
+                                    "[SMTP] The filter flagged uid={} for '{}' but it could not be filed: {}",
+                                    email.uid, username, e
+                                ),
+                            }
+                        }
+
                         // Subject rules run here, on delivery, because this is the only
                         // moment the server can see a subject: the message is encrypted
                         // immediately afterwards and never readable again.

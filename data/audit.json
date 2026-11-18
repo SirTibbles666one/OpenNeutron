@@ -269,6 +269,24 @@
       "detail": "",
       "prev": "20b6374d1fcebf82ae9f368052013baac484ed3b2e097cc6650c1dfc3bc656f4",
       "hash": "145eecad641f975ce5a88d9f24ea1cb08f9174deeeab348257d0802f3cabadfb"
+    },
+    {
+      "at": 1795023181,
+      "actor": "tibs",
+      "action": "audit.read",
+      "target": "",
+      "detail": "",
+      "prev": "145eecad641f975ce5a88d9f24ea1cb08f9174deeeab348257d0802f3cabadfb",
+      "hash": "f326f028ea2598174ecc5be4a6bd285003034dceeb8afe5fe6501e37b9fe7c16"
+    },
+    {
+      "at": 1795023251,
+      "actor": "tibs",
+      "action": "user.suspend",
+      "target": "penis",
+      "detail": "Suspicious or illegal activity",
+      "prev": "f326f028ea2598174ecc5be4a6bd285003034dceeb8afe5fe6501e37b9fe7c16",
+      "hash": "24bb56caeb1bd1cc112cb7c6a0b840d39c8843d52b505295c1c644634a315a63"
     }
   ]
 }
