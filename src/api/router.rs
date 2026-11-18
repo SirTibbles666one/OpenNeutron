@@ -173,6 +173,26 @@ impl Router {
                                 RouteAuth::Staff => !role.can_moderate(),
                                 _ => false,
                             };
+                            // Opt-in, because the account that has to enrol first is the one
+                            // this would refuse. Set SLOTH_MFA_REQUIRED=1 once the owner has.
+                            let mfa_gap = matches!(auth, RouteAuth::Admin | RouteAuth::Staff)
+                                && role.can_moderate()
+                                && std::env::var("SLOTH_MFA_REQUIRED").ok().as_deref() == Some("1")
+                                && !crate::core::twofactor::enrolled(&u.username);
+                            if mfa_gap {
+                                log::warn!(
+                                    "[API] Refused {} to '{}': no second factor enrolled",
+                                    path,
+                                    u.username
+                                );
+                                let response = error_response(
+                                    403,
+                                    "mfa_required",
+                                    "Enrol a second factor before using administrative actions",
+                                );
+                                let _ = request.respond(add_cors_headers(response, origin_ref));
+                                return;
+                            }
                             if refused {
                                 log::warn!(
                                     "[API] Denied {} route {} {} to '{}' (role {})",

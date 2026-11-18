@@ -341,3 +341,13 @@ pub fn disable(username: &str) -> Result<(), String> {
     guard.entries.remove(username);
     save(&guard).map_err(|e| e.to_string())
 }
+
+/// Does this account have a second factor of any kind — a TOTP secret or a WebAuthn key?
+/// The panel asks this of the people who can moderate, and the router asks it when
+/// enforcement is switched on.
+pub fn enrolled(username: &str) -> bool {
+    if get(username).map(|entry| entry.is_active()).unwrap_or(false) {
+        return true;
+    }
+    crate::core::webauthn::has_any(username)
+}

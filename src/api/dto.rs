@@ -94,6 +94,10 @@ pub struct UserDto {
     pub suspended: bool,
     /// Address a recovery link can be sent to; None when the account has none.
     pub recovery_email: Option<String>,
+    /// Whether a second factor is enrolled. Present so the panel can say so before an
+    /// operator is refused at the moment they try to act.
+    #[serde(default)]
+    pub mfa_enrolled: bool,
 }
 
 impl UserDto {
@@ -112,6 +116,7 @@ impl UserDto {
             pending: false,
             suspended: false,
             recovery_email: crate::core::recovery::store().get(&u.username).email,
+            mfa_enrolled: crate::core::twofactor::enrolled(&u.username),
         }
     }
 
