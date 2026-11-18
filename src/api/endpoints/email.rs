@@ -271,11 +271,16 @@ pub fn list_email_uids(
     // the page is measured against what remains after they are taken out.
     let trashed = crate::core::trash::trashed_uids(&user.username);
     let snoozed = crate::core::snooze::snoozed_uids(&user.username, crate::core::snooze::now());
+    // Junk leaves the Inbox and is readable only in the Junk view, which asks for it. A
+    // message the filter convicts must not sit in the list the person actually reads.
+    let junked = crate::core::junk::junked_uids(&user.username);
+    let want_junk = request_body.junk.unwrap_or(false);
     let live: Vec<u128> = user
         .emailIds
         .iter()
         .copied()
         .filter(|id| !trashed.contains(id) && !snoozed.contains(id))
+        .filter(|id| if want_junk { junked.contains(id) } else { !junked.contains(id) })
         .filter(|id| in_mailbox(&user, *id, &request_body.addresses))
         .collect();
 

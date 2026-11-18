@@ -18,6 +18,8 @@ services:
       - /etc/letsencrypt:/etc/letsencrypt:ro
     environment:
       RUST_LOG: info
+      RSPAMD_CONTROLLER: "172.17.0.1:11334"
+      RSPAMD_CONTROLLER_PASSWORD: "YJ2Dd7sRYX8HY9g4M3QecsdKElrGMC"
     tty: true
     stdin_open: true
     # Run with no capabilities at all. The app binds 2525 and 8080 (both above 1024),

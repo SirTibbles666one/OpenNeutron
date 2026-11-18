@@ -28,8 +28,16 @@ use crate::api::dto::json_header;
 use crate::api::request::read_json_body;
 use crate::core::{EmailStorage, User, UserStorage};
 
-/// rspamd's controller, on the loopback interface. Not exposed anywhere else.
-const RSPAMD: &str = "127.0.0.1:11334";
+/// rspamd's controller. The app runs in a container, so the host's loopback is not
+/// reachable from here: this is the docker bridge address rspamd binds for us, and it is
+/// password-protected because anything else on that bridge could otherwise teach the
+/// corpus. Both come from the environment so the address is not baked into a binary.
+fn controller() -> (String, Option<String>) {
+    (
+        std::env::var("RSPAMD_CONTROLLER").unwrap_or_else(|_| "127.0.0.1:11334".to_string()),
+        std::env::var("RSPAMD_CONTROLLER_PASSWORD").ok(),
+    )
+}
 /// Reports accepted per account per hour.
 const REPORTS_PER_HOUR: u64 = 100;
 
@@ -81,20 +89,35 @@ fn take_budget(username: &str) -> bool {
 /// Hand the message to rspamd. Written by hand rather than with an HTTP crate: this project
 /// carries no HTTP client and the build runs offline, and the protocol here is one request
 /// with no reply body that matters — a status line is the whole answer.
-fn learn(verdict: &str, raw: &str) -> Result<String, String> {
+/// What rspamd did with the message. "It refused to learn" is not "the report failed" —
+/// a message can be too short to train on (rspamd needs 11 tokens) or already known, and
+/// either way the person still wants it out of their Inbox.
+enum Outcome {
+    Learned,
+    AlreadyKnown,
+    NotEnoughContent,
+}
+
+fn learn(verdict: &str, raw: &str) -> Result<Outcome, String> {
+    // rspamd's controller spells these without an underscore: /learnspam, /learnham.
+    // The underscored forms are not routes on this build and answer 404.
     let path = match verdict {
-        "spam" => "/learn_spam",
-        "ham" => "/learn_ham",
+        "spam" => "/learnspam",
+        "ham" => "/learnham",
         other => return Err(format!("unknown verdict '{other}'")),
     };
 
-    let mut stream = TcpStream::connect(RSPAMD)
-        .map_err(|e| format!("rspamd is not reachable at {RSPAMD}: {e}"))?;
+    let (addr, password) = controller();
+    let mut stream = TcpStream::connect(&addr)
+        .map_err(|e| format!("rspamd is not reachable at {addr}: {e}"))?;
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(20)));
 
     let body = raw.as_bytes();
+    let auth = password
+        .map(|p| format!("Password: {p}\r\n"))
+        .unwrap_or_default();
     let head = format!(
-        "POST {path} HTTP/1.1\r\nHost: {RSPAMD}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\n{auth}Content-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream
@@ -106,8 +129,15 @@ fn learn(verdict: &str, raw: &str) -> Result<String, String> {
     let _ = stream.read_to_string(&mut response);
     let status = response.lines().next().unwrap_or("").to_string();
 
+    // 208 Already Reported is rspamd saying it has seen this message before. The reporter
+    // wanted the filter to know it; it does, so that is success rather than an error.
     if status.contains(" 200") {
-        Ok(status)
+        Ok(Outcome::Learned)
+    } else if status.contains(" 208") {
+        Ok(Outcome::AlreadyKnown)
+    } else if status.contains(" 204") {
+        // "contains less tokens than required for bayes classifier" — nothing to learn.
+        Ok(Outcome::NotEnoughContent)
     } else if status.is_empty() {
         Err("rspamd closed the connection without answering".to_string())
     } else {
@@ -161,19 +191,48 @@ pub fn report(
         return json_error(400, "bad_message", "That does not look like a message");
     }
 
+    // File first. Whether the filter can learn from this message is a separate question
+    // from whether the person gets it out of their Inbox, and the second one is the
+    // promise the button makes. A short message, an already-known one, or a broken rspamd
+    // must not leave reported spam where it was.
+    let filed = if body.verdict == "spam" {
+        crate::core::junk::add(&user.username, uid)
+    } else {
+        crate::core::junk::remove(&user.username, uid).map(|_| ())
+    };
+    if let Err(e) = filed {
+        return json_error(500, "junk_failed", &format!("Could not move the message: {e}"));
+    }
+
     match learn(&body.verdict, &body.raw) {
-        Ok(_) => out(
+        Ok(Outcome::Learned) => out(
+            200,
+            serde_json::to_vec(&json!({ "learned": true, "filed": true, "verdict": body.verdict }))
+                .unwrap_or_default(),
+        ),
+        Ok(Outcome::AlreadyKnown) => out(
             200,
             serde_json::to_vec(&json!({
-                "learned": true,
-                "verdict": body.verdict,
+                "learned": false, "filed": true, "verdict": body.verdict,
+                "note": "the filter already knew this one"
             }))
             .unwrap_or_default(),
         ),
-        Err(message) => {
-            // A filter that cannot learn must say so; silently reporting success would let
-            // a broken rspamd look like a working spam button for months.
-            json_error(503, "learn_failed", &message)
-        }
+        Ok(Outcome::NotEnoughContent) => out(
+            200,
+            serde_json::to_vec(&json!({
+                "learned": false, "filed": true, "verdict": body.verdict,
+                "note": "moved to Junk, but too short for the filter to learn from"
+            }))
+            .unwrap_or_default(),
+        ),
+        Err(message) => out(
+            200,
+            serde_json::to_vec(&json!({
+                "learned": false, "filed": true, "verdict": body.verdict,
+                "note": format!("moved to Junk, but the filter could not be taught: {message}")
+            }))
+            .unwrap_or_default(),
+        ),
     }
 }

@@ -1,0 +1,15 @@
+# What does not belong in the build context.
+#
+# target/ is 3.7 GB of build output. It was being copied into every image, which made a
+# deploy take ~7 minutes and, worse, baked a stale binary into the image that only the
+# entrypoint's "sources newer than binary" check could catch. The container mounts the
+# project directory at runtime anyway, so the compiler output it uses is the host's — the
+# copy in the image was pure cost.
+target/
+data/
+.git/
+.gitignore
+tmp/
+*.log
+*.tmp
+node_modules/

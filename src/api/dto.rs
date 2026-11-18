@@ -320,6 +320,9 @@ pub struct ListEmailsRequest {
     /// Read one mailbox: the addresses that feed it. Absent means every message.
     #[serde(default)]
     pub addresses: Option<Vec<String>>,
+    /// Read the Junk view instead of the live mailbox. Absent means the Inbox.
+    #[serde(default)]
+    pub junk: Option<bool>,
 }
 
 #[derive(Deserialize)]

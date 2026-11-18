@@ -31,6 +31,14 @@
       "disabled_at": null,
       "received": 1,
       "owner": "qatester2"
+    },
+    "rust-pebble-959": {
+      "username": "tibs",
+      "label": "Spam",
+      "created_at": 1795014264,
+      "disabled_at": null,
+      "received": 0,
+      "owner": "tibs"
     }
   }
 }
