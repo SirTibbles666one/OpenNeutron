@@ -116,6 +116,69 @@
       "detail": "",
       "prev": "9fdc3efb3880346cf8c6cffcaf5dcc29cfbc8619786ffb5b705215fc80cde280",
       "hash": "67e0b427f45aa35ff7f0baedeade9e1cc65c7d4cdf7e434fec6f60abfd0beaef"
+    },
+    {
+      "at": 1795017151,
+      "actor": "tibs",
+      "action": "user.recovery.set",
+      "target": "qa",
+      "detail": "qa@slothlee.xyz",
+      "prev": "67e0b427f45aa35ff7f0baedeade9e1cc65c7d4cdf7e434fec6f60abfd0beaef",
+      "hash": "23db52bda4dde530cca4e51b352775d22f1242dbd00f0e5a1557ef70152be86e"
+    },
+    {
+      "at": 1795017151,
+      "actor": "tibs",
+      "action": "user.suspend",
+      "target": "qa",
+      "detail": "notification test; until 2026-11-18",
+      "prev": "23db52bda4dde530cca4e51b352775d22f1242dbd00f0e5a1557ef70152be86e",
+      "hash": "eb6dcadbb189e8add6764f93935ffde13530bc6118fd93de9e1e64aadf47610d"
+    },
+    {
+      "at": 1795017161,
+      "actor": "tibs",
+      "action": "user.unsuspend",
+      "target": "qa",
+      "detail": "notification test done",
+      "prev": "eb6dcadbb189e8add6764f93935ffde13530bc6118fd93de9e1e64aadf47610d",
+      "hash": "d9f35099c85f0f179a8e375234f5f5750bda0239fbd3c192d869475723b76020"
+    },
+    {
+      "at": 1795017358,
+      "actor": "tibs",
+      "action": "user.recovery.set",
+      "target": "qa",
+      "detail": "tibs@slothlee.xyz",
+      "prev": "d9f35099c85f0f179a8e375234f5f5750bda0239fbd3c192d869475723b76020",
+      "hash": "34dae1866b53d979a4b41f83647e1dd6d63a9ebf122ac93c71e78eafc5a5fa72"
+    },
+    {
+      "at": 1795017358,
+      "actor": "tibs",
+      "action": "user.suspend",
+      "target": "qa",
+      "detail": "notification test two; until 2026-11-18",
+      "prev": "34dae1866b53d979a4b41f83647e1dd6d63a9ebf122ac93c71e78eafc5a5fa72",
+      "hash": "f9f3386ec97eb60fcdb8d5d6334536f8caf089c6c6e455ec825f7d9e120152fa"
+    },
+    {
+      "at": 1795017379,
+      "actor": "tibs",
+      "action": "user.unsuspend",
+      "target": "qa",
+      "detail": "notification test complete",
+      "prev": "f9f3386ec97eb60fcdb8d5d6334536f8caf089c6c6e455ec825f7d9e120152fa",
+      "hash": "7825eca413f35c4b2bdb1e00a4bb85534168adf57ac6ff784a6a86c9b88f86ac"
+    },
+    {
+      "at": 1795017379,
+      "actor": "tibs",
+      "action": "user.recovery.set",
+      "target": "qa",
+      "detail": "(cleared)",
+      "prev": "7825eca413f35c4b2bdb1e00a4bb85534168adf57ac6ff784a6a86c9b88f86ac",
+      "hash": "1f41c4a8b1df2c2497874a647d2a471d9730153f000fe5bf025b3d4a71b35785"
     }
   ]
 }

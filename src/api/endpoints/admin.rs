@@ -812,6 +812,16 @@ pub fn suspend(
                 &username,
                 &detail,
             );
+
+            // A courtesy, not a channel we invent: this only queues when the account already
+            // has a recovery address, and the host does the sending.
+            if state {
+                match crate::core::notify::suspension(&username, &req.reason, until) {
+                    Ok(Some(to)) => log::info!("[Admin] Queued a suspension notice to the recovery address for '{}'", username),
+                    Ok(None) => log::info!("[Admin] '{}' has no recovery address, so no notice was queued", username),
+                    Err(e) => log::warn!("[Admin] Could not queue a suspension notice: {}", e),
+                }
+            }
             Response::from_data(
                 serde_json::to_vec(&json!({
                     "username": username,

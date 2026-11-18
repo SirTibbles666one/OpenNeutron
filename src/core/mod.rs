@@ -32,6 +32,7 @@ pub mod scheduled;
 pub mod ephemeral;
 pub mod trash;
 pub mod audit;
+pub mod notify;
 pub mod junk;
 pub mod subject_rules;
 pub mod notes;
