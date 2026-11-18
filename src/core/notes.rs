@@ -436,7 +436,11 @@ mod tests {
         let path = dir.join("notes.json");
         let n = note_at(&dir, "tok1", None);
         {
-            let _held = LOCK.lock().unwrap();
+            // Recover rather than panic: one panic while this lock was held would poison it,
+            // and every later call would panic too — turning a single bug into an endpoint
+            // that is broken until the process restarts. The other nine locks here already
+            // recover this way.
+            let _held = LOCK.lock().unwrap_or_else(|p| p.into_inner());
             let mut store = read_at(&path);
             store.notes.insert("tok1".into(), n.clone());
             write_at(&path, &store).unwrap();

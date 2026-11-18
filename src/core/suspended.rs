@@ -203,7 +203,11 @@ mod tests {
         let p = temp_path("roundtrip");
         let _ = fs::remove_file(&p);
         {
-            let _held = LOCK.lock().unwrap();
+            // Recover rather than panic: one panic while this lock was held would poison it,
+            // and every later call would panic too — turning a single bug into an endpoint
+            // that is broken until the process restarts. The other nine locks here already
+            // recover this way.
+            let _held = LOCK.lock().unwrap_or_else(|p| p.into_inner());
             let mut store = Store::default();
             store.entries.insert(
                 "tibs".into(),
