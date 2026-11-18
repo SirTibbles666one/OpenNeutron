@@ -396,6 +396,10 @@ pub struct SendEmailRequest {
     /// the subject that goes out is the one inside the MIME data.
     #[serde(default)]
     pub subject: String,
+    /// The subject sealed to the sender's own public key. When present the plaintext above is
+    /// expected to be empty: the held list decrypts this instead of asking the server to read it.
+    #[serde(default)]
+    pub subject_enc: Option<String>,
     /// Send as one of this account's own aliases (local part or full address).
     #[serde(default)]
     pub from_alias: Option<String>,
@@ -572,6 +576,10 @@ pub struct SendEncryptedRequest {
     /// For the sender's list of queued messages; not used for delivery.
     #[serde(default)]
     pub subject: String,
+    /// The subject sealed to the sender's own public key. When present the plaintext above is
+    /// expected to be empty: the held list decrypts this instead of asking the server to read it.
+    #[serde(default)]
+    pub subject_enc: Option<String>,
     /// Send as one of this account's own aliases (local part or full address).
     #[serde(default)]
     pub from_alias: Option<String>,

@@ -55,6 +55,10 @@ impl Kind {
 #[serde(rename_all = "lowercase")]
 pub enum Status {
     Pending,
+    /// Claimed by a sender that is putting it on the wire right now. Only one process can hold
+    /// this: `claim` flips Pending -> Sending under the lock, so a second process looking at the
+    /// same queue cannot send the same message again. Blue-green deploys run two processes.
+    Sending,
     Sent,
     Failed,
     Cancelled,
@@ -64,6 +68,7 @@ impl Status {
     pub fn as_str(&self) -> &'static str {
         match self {
             Status::Pending => "pending",
+            Status::Sending => "sending",
             Status::Sent => "sent",
             Status::Failed => "failed",
             Status::Cancelled => "cancelled",
@@ -84,11 +89,18 @@ pub struct Item {
     /// For the sender's own list; never used for delivery.
     #[serde(default)]
     pub subject: String,
+    /// The subject sealed to the sender's own key. Stored and returned opaquely: the server can
+    /// hand it back for the held list without ever being able to read what the message is about.
+    #[serde(default)]
+    pub subject_enc: Option<String>,
     pub created_at: u64,
     pub send_at: u64,
     pub status: Status,
     #[serde(default)]
     pub sent_at: Option<u64>,
+    /// When a sender claimed it. Used to recover a claim whose process died mid-send.
+    #[serde(default)]
+    pub claimed_at: Option<u64>,
     #[serde(default)]
     pub error: String,
 }
@@ -146,6 +158,7 @@ pub fn queue(
     kind: Kind,
     data: String,
     subject: String,
+    subject_enc: Option<String>,
     send_at: u64,
 ) -> Result<Item, QueueError> {
     let _held = LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -176,10 +189,12 @@ pub fn queue(
         kind,
         data,
         subject: subject.chars().take(120).collect(),
+        subject_enc,
         created_at: current,
         send_at,
         status: Status::Pending,
         sent_at: None,
+        claimed_at: None,
         error: String::new(),
     };
     store.items.insert(item.id.clone(), item.clone());
@@ -197,6 +212,7 @@ pub struct Row {
     pub id: String,
     pub to: Vec<String>,
     pub subject: String,
+    pub subject_enc: Option<String>,
     pub created_at: u64,
     pub send_at: u64,
     pub status: String,
@@ -215,6 +231,7 @@ pub fn list(owner: &str) -> Vec<Row> {
             id: i.id.clone(),
             to: i.to.clone(),
             subject: i.subject.clone(),
+            subject_enc: i.subject_enc.clone(),
             created_at: i.created_at,
             send_at: i.send_at,
             status: i.status.as_str().to_string(),
@@ -260,6 +277,7 @@ pub fn reschedule(
     to: Vec<String>,
     data: String,
     subject: String,
+    subject_enc: Option<String>,
     send_at: u64,
 ) -> Result<Option<Item>, QueueError> {
     let _held = LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -292,6 +310,7 @@ pub fn reschedule(
     item.kind = kind;
     item.data = data;
     item.subject = subject.chars().take(120).collect();
+    item.subject_enc = subject_enc;
     item.send_at = send_at;
     item.error.clear();
     let updated = item.clone();
@@ -314,6 +333,72 @@ pub fn due(at: u64) -> Vec<Item> {
         .collect();
     items.sort_by_key(|i| i.send_at);
     items
+}
+
+/// Take a due message, if it is still there to take.
+///
+/// `due` is a read: two processes that sweep at the same moment both see the same item. `claim`
+/// is the write that decides — exactly one caller moves it to Sending, and the other is told to
+/// leave it alone. This is what makes it safe to run an old and a new server at the same time.
+/// May this item be taken by a sender at `at`? Pure, so the rule can be tested without a store.
+fn claimable(item: &Item, at: u64) -> bool {
+    item.status == Status::Pending && item.send_at <= at
+}
+
+/// Is this claim older than the point where it must be assumed dead?
+fn is_stale(item: &Item, current: u64, stale_after: u64) -> bool {
+    if item.status != Status::Sending {
+        return false;
+    }
+    match item.claimed_at {
+        Some(when) => when == 0 || current.saturating_sub(when) >= stale_after,
+        None => true,
+    }
+}
+
+pub fn claim(id: &str, at: u64) -> bool {
+    let _held = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let path = path();
+    let mut store = read_at(&path);
+    let taken = match store.items.get_mut(id) {
+        Some(item) if claimable(item, at) => {
+            item.status = Status::Sending;
+            item.claimed_at = Some(now());
+            true
+        }
+        _ => false,
+    };
+    if taken {
+        if let Err(e) = write_at(&path, &store) {
+            log::error!("[Scheduled] Could not record a claim on {}: {}", id, e);
+            return false;
+        }
+    }
+    taken
+}
+
+/// A claim older than `stale_after` seconds belongs to a process that died mid-send. Put it back
+/// in the queue rather than leaving a message nobody will ever send and nobody can cancel.
+pub fn recover_stale(stale_after: u64) -> usize {
+    let _held = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let path = path();
+    let mut store = read_at(&path);
+    let current = now();
+    let mut recovered = 0;
+    let mut touched = false;
+    for item in store.items.values_mut() {
+        if is_stale(item, current, stale_after) {
+            item.status = Status::Pending;
+            item.claimed_at = None;
+            recovered += 1;
+            touched = true;
+            log::warn!("[Scheduled] Recovered a stale claim on {}", item.id);
+        }
+    }
+    if touched {
+        let _ = write_at(&path, &store);
+    }
+    recovered
 }
 
 /// Record the outcome and drop the body: whether it went or failed, the bytes do
@@ -381,6 +466,41 @@ mod tests {
         assert_eq!(s, "\"pending\"");
         let back: Status = serde_json::from_str("\"failed\"").unwrap();
         assert_eq!(back, Status::Failed);
+    }
+
+    fn item(status: Status, send_at: u64, claimed_at: Option<u64>) -> Item {
+        Item {
+            id: "x".into(),
+            owner: "tibs".into(),
+            to: vec!["a@b.c".into()],
+            kind: Kind::Encrypted,
+            data: "payload".into(),
+            subject: String::new(),
+            subject_enc: None,
+            created_at: 0,
+            send_at,
+            status,
+            sent_at: None,
+            claimed_at,
+            error: String::new(),
+        }
+    }
+
+    #[test]
+    fn only_a_due_pending_item_can_be_claimed() {
+        assert!(claimable(&item(Status::Pending, 100, None), 100));
+        assert!(!claimable(&item(Status::Pending, 101, None), 100), "not yet due");
+        assert!(!claimable(&item(Status::Sending, 100, Some(99)), 100), "already taken");
+        assert!(!claimable(&item(Status::Sent, 100, None), 100));
+        assert!(!claimable(&item(Status::Cancelled, 100, None), 100));
+    }
+
+    #[test]
+    fn a_claim_is_stale_only_after_the_grace_period() {
+        assert!(!is_stale(&item(Status::Sending, 0, Some(1000)), 1100, 300), "still alive");
+        assert!(is_stale(&item(Status::Sending, 0, Some(1000)), 1400, 300), "grace elapsed");
+        assert!(is_stale(&item(Status::Sending, 0, None), 1000, 300), "no timestamp at all");
+        assert!(!is_stale(&item(Status::Pending, 0, None), 1000, 300), "pending is not a claim");
     }
 
     #[test]

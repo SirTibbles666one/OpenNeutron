@@ -663,6 +663,7 @@ pub fn send_email(
             crate::core::scheduled::Kind::Raw,
             req.data.clone(),
             req.subject.clone(),
+            req.subject_enc.clone(),
             at,
         ) {
             Ok(item) => {
@@ -1030,6 +1031,7 @@ pub fn send_encrypted(
                 to,
                 payload,
                 req.subject.clone(),
+                req.subject_enc.clone(),
                 at,
             )
             .map(|maybe| maybe.map(|item| (item, true))),
@@ -1039,6 +1041,7 @@ pub fn send_encrypted(
                 crate::core::scheduled::Kind::Encrypted,
                 payload,
                 req.subject.clone(),
+                req.subject_enc.clone(),
                 at,
             )
             .map(|item| Some((item, false))),

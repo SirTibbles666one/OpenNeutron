@@ -127,6 +127,8 @@ fn main() -> Result<()> {
             // messages from a different year.
             crate::core::junk::sweep(&sweeper_users, &sweeper_mail);
             crate::core::notes::sweep();
+            // A claim is only good while the process that took it is alive.
+            crate::core::scheduled::recover_stale(300);
             // Sessions age out on their own: the registry had no upper bound, so a
             // copied cookie outlived the device it was copied from.
             crate::core::sessions::sweep(crate::core::arrival::now());
@@ -138,7 +140,13 @@ fn main() -> Result<()> {
         // minute people pick.
         let sweeper_port = api_port;
         thread::spawn(move || loop {
-            for item in crate::core::scheduled::due(crate::core::scheduled::now()) {
+            let due_at = crate::core::scheduled::now();
+            for item in crate::core::scheduled::due(due_at) {
+                // Another process may be sweeping the same queue during a deploy. Claiming is the
+                // write that decides which one sends it.
+                if !crate::core::scheduled::claim(&item.id, due_at) {
+                    continue;
+                }
                 use crate::core::scheduled::Kind;
                 match item.kind {
                     Kind::Raw => {
