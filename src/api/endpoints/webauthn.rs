@@ -135,6 +135,12 @@ fn reauthenticated(username: &str, body: &serde_json::Value) -> Result<(), Resp>
     if !twofactor::is_enabled(username) {
         return Ok(());
     }
+    // No key enrolled yet: there is nothing to touch and, if the person has no authenticator
+    // app to hand, no code to give. The password-authenticated session is the proof, and the
+    // alternative is an account that can never add a hardware key at all.
+    if webauthn::count(username) == 0 {
+        return Ok(());
+    }
     // A key touched in the last five minutes is proof enough, and is the flow a hardware
     // key owner expects: no app, no digits, one touch.
     if reauth_live(username) {
@@ -174,7 +180,10 @@ pub fn list(request: &mut Request, user: Option<User>, _u: Arc<UserStorage>, _e:
         "rp_id": RP_ID,
         // An account without an authenticator app has no code to give, and asking
         // for one would make the screen unusable rather than safer.
-        "code_required": twofactor::is_enabled(&user.username),
+        // Only once a key exists: with none enrolled there is nothing to touch, and asking
+        // for an app code is the deadlock that made the first key impossible to add.
+        "code_required": twofactor::is_enabled(&user.username)
+            && webauthn::count(&user.username) > 0,
     }))
 }
 
@@ -298,6 +307,7 @@ pub fn register_finish(
         return error(400, "storage_error", &e);
     }
     log::info!("[WebAuthn] '{}' enrolled a security key '{}'", user.username, name);
+    let _ = crate::core::audit::append(&user.username, "user.key.add", &user.username, &name);
     ok_json(serde_json::json!({
         "message": "Security key added",
         "key": { "id": registered.credential_id, "name": name }
@@ -328,7 +338,8 @@ pub fn remove(
     match webauthn::remove(&user.username, id) {
         Ok(()) => {
             log::warn!("[WebAuthn] '{}' removed a security key", user.username);
-            ok_json(serde_json::json!({ "message": "Security key removed" }))
+            let _ = crate::core::audit::append(&user.username, "user.key.remove", &user.username, &id);
+    ok_json(serde_json::json!({ "message": "Security key removed" }))
         }
         Err(e) => error(404, "not_found", &e),
     }

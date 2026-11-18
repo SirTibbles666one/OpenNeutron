@@ -215,6 +215,33 @@
       "detail": "",
       "prev": "53476280a26789fb05eb4cd9e1994d58504f29d81cb1a9a462939dac0d67b615",
       "hash": "0f4f0415240400147ec7b779c66f40980d5e89e797cd8c311444c45dbb62fbcb"
+    },
+    {
+      "at": 1795020627,
+      "actor": "qa",
+      "action": "user.key.add",
+      "target": "qa",
+      "detail": "YubiKey",
+      "prev": "0f4f0415240400147ec7b779c66f40980d5e89e797cd8c311444c45dbb62fbcb",
+      "hash": "d24e98cca00f737c3268a10bfe5756aea7f1923ce66f22c6251c875ef1a7fe45"
+    },
+    {
+      "at": 1795020639,
+      "actor": "qa",
+      "action": "user.key.remove",
+      "target": "qa",
+      "detail": "hMltL81l0aOFtsxALAHyrrUP6qrZQOIXjd-eTCNvGn4",
+      "prev": "d24e98cca00f737c3268a10bfe5756aea7f1923ce66f22c6251c875ef1a7fe45",
+      "hash": "4ef61bb3d2b1612c3e1ede1e5728bcf53f80e138c8b90440ab7f627bd7258f0c"
+    },
+    {
+      "at": 1795020644,
+      "actor": "tibs",
+      "action": "audit.read",
+      "target": "",
+      "detail": "",
+      "prev": "4ef61bb3d2b1612c3e1ede1e5728bcf53f80e138c8b90440ab7f627bd7258f0c",
+      "hash": "abcd7c244df6efc47e20b6fe7021945abefaef41ecb180261d76542da2d8f27f"
     }
   ]
 }
