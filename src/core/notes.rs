@@ -379,7 +379,9 @@ pub fn sweep() {
 
     let before = store.notes.len();
     store.notes.retain(|_, n| {
-        let settled_at = n.opened_at.or(n.expired_at);
+        // A revoked note that was never opened has neither timestamp, so it used to fall into
+        // the `None` arm and stay in the store forever. Revoking settles it.
+        let settled_at = n.opened_at.or(n.expired_at).or(n.revoked_at);
         match settled_at {
             Some(at) => now.saturating_sub(at) < STATUS_TTL_SECONDS,
             None => true,

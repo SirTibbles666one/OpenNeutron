@@ -34,6 +34,14 @@ pub struct SessionRecord {
 /// forgotten session on a sold laptop stops being a key.
 pub const MAX_AGE_SECS: u64 = 30 * 24 * 3600;
 
+/// How many sessions one account may hold at once.
+///
+/// The registry is a list a person reads ("signed-in devices"), and an account with hundreds of
+/// entries is a list nobody can use - one test account here held 400. It is also a spray
+/// surface: a stolen password can mint sessions faster than anyone notices. The oldest idle
+/// sessions go first, so the newest device is never the one dropped.
+pub const MAX_PER_ACCOUNT: usize = 20;
+
 /// How long a session may sit unused. A session that has not been seen in a
 /// fortnight is abandoned, not in use: refusing it costs the owner one sign-in and
 /// costs an attacker holding a stale cookie the whole session.
@@ -161,9 +169,31 @@ pub fn record(id: &str, username: &str, token: &str, user_agent: &str, ip: &str,
             last_seen_at: now,
         },
     );
+    trim_account(&mut guard, username, Some(id));
     if let Err(e) = save(&guard) {
         log::warn!("[Sessions] Could not persist new session for '{}': {}", username, e);
     }
+}
+
+/// Keep at most `MAX_PER_ACCOUNT` sessions for one account, never dropping `keep`.
+fn trim_account(store: &mut SessionStore, username: &str, keep: Option<&str>) -> usize {
+    let mut mine: Vec<(String, u64)> = store
+        .entries
+        .iter()
+        .filter(|(id, r)| r.username == username && Some(id.as_str()) != keep)
+        .map(|(id, r)| (id.clone(), r.last_seen_at))
+        .collect();
+    // A session being created counts against the cap; a sweep has no such extra one.
+    let held = mine.len() + if keep.is_some() { 1 } else { 0 };
+    if held <= MAX_PER_ACCOUNT {
+        return 0;
+    }
+    let excess = held - MAX_PER_ACCOUNT;
+    mine.sort_by_key(|(_, seen)| *seen);
+    for (id, _) in mine.into_iter().take(excess) {
+        store.entries.remove(&id);
+    }
+    excess
 }
 
 /// Is this token still allowed to act?
@@ -287,6 +317,14 @@ pub fn clear_user(username: &str) {
 pub fn sweep_in(store: &mut SessionStore, now: u64) -> usize {
     let before = store.entries.len();
     store.entries.retain(|_, r| !expired(r, now));
+    // Then the per-account cap, so an account that accumulated sessions before the cap existed
+    // shrinks without waiting to sign in again.
+    let mut names: Vec<String> = store.entries.values().map(|r| r.username.clone()).collect();
+    names.sort();
+    names.dedup();
+    for name in names {
+        trim_account(store, &name, None);
+    }
     before.saturating_sub(store.entries.len())
 }
 
@@ -362,5 +400,57 @@ mod expiry_tests {
         assert_eq!(removed, 2);
         assert!(store.entries.contains_key("live"));
         assert_eq!(store.entries.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::*;
+
+    fn rec(username: &str, seen: u64) -> SessionRecord {
+        SessionRecord {
+            username: username.to_string(),
+            token_hash: String::new(),
+            user_agent: String::new(),
+            ip: String::new(),
+            created_at: seen,
+            last_seen_at: seen,
+        }
+    }
+
+    /// The registry is a list a person reads. One account had 400 entries, which is not a list
+    /// anyone can use, and a stolen password could spray more than that in a minute.
+    #[test]
+    fn one_account_keeps_at_most_the_cap_and_the_newest_survives() {
+        let mut store = SessionStore::default();
+        for i in 0..40u64 {
+            store.entries.insert(format!("old{i}"), rec("alice", 1_000 + i));
+        }
+        store.entries.insert("brand-new".into(), rec("alice", 9_999));
+        store.entries.insert("someone-else".into(), rec("bob", 5));
+
+        trim_account(&mut store, "alice", Some("brand-new"));
+
+        let alice: Vec<&String> = store
+            .entries
+            .iter()
+            .filter(|(_, r)| r.username == "alice")
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(alice.len(), MAX_PER_ACCOUNT, "alice keeps exactly the cap");
+        assert!(store.entries.contains_key("brand-new"), "the new session is never the one dropped");
+        assert!(store.entries.contains_key("someone-else"), "another account is untouched");
+        assert!(!store.entries.contains_key("old0"), "the oldest idle session goes first");
+    }
+
+    /// A sweep has no session of its own to protect, so it must not drop one extra.
+    #[test]
+    fn a_sweep_keeps_exactly_the_cap() {
+        let mut store = SessionStore::default();
+        for i in 0..30u64 {
+            store.entries.insert(format!("s{i}"), rec("carol", 1_000 + i));
+        }
+        trim_account(&mut store, "carol", None);
+        assert_eq!(store.entries.len(), MAX_PER_ACCOUNT);
     }
 }
