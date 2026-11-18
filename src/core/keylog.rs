@@ -11,9 +11,18 @@
 //! ```text
 //! leaf   = SHA-256("kt/v1/leaf" | u32be(seq) | u16be(len) | account
 //!                  | sha256(rsa_der) | sha256(pq_ek) or 32 zero bytes)
+//!        = SHA-256("kt/v2/leaf" | the same fields | sha256(sig_pk))
+//!                                                     (only when a signing key exists)
 //! node   = SHA-256("kt/v1/node" | left | right)      (odd node promoted)
 //! head   = { size, root } signed with ML-DSA-65
 //! ```
+//!
+//! The version split is not cosmetic. Every client that ever pinned a head has the
+//! root over the v1 leaves, and a leaf that gains a signing key is appended after
+//! them — never rewritten. Hashing a leaf *with* `sig` under the v1 label would
+//! change the shape of the input while keeping the old domain separator, so an
+//! older client would compute a different hash for the same bytes and reject a
+//! valid proof. A separate label makes the two formats impossible to confuse.
 //!
 //! A client asks for a leaf plus its audit path, recomputes the root, and
 //! compares it with a head it has pinned. Nothing here can prove the server never
@@ -34,16 +43,42 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 const LEAF_LABEL: &[u8] = b"kt/v1/leaf";
+/// Leaves that carry a signing key hash hash under their own label. Existing
+/// leaves keep the v1 label, so no recorded history moves and every pinned head
+/// stays valid; a leaf that gains a signing key is an append like any other.
+const LEAF_LABEL_V2: &[u8] = b"kt/v2/leaf";
 const NODE_LABEL: &[u8] = b"kt/v1/node";
 const HEAD_LABEL: &[u8] = b"kt/v1/head";
 const EMPTY_ROOT_LABEL: &[u8] = b"kt/v1/empty";
 
 fn log_path() -> PathBuf {
+    // Tests that exercise the append path point this at a scratch directory. The
+    // suite shares its working directory with the live app, and the override is
+    // thread-local so parallel tests cannot redirect each other.
+    #[cfg(test)]
+    if let Some((log, _)) = test_paths() {
+        return log;
+    }
     PathBuf::from("data/keylog.json")
 }
 
 fn key_path() -> PathBuf {
+    #[cfg(test)]
+    if let Some((_, key)) = test_paths() {
+        return key;
+    }
     PathBuf::from("data/ktkey.json")
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PATHS: std::cell::RefCell<Option<(PathBuf, PathBuf)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn test_paths() -> Option<(PathBuf, PathBuf)> {
+    TEST_PATHS.with(|p| p.borrow().clone())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -61,6 +96,11 @@ pub struct Leaf {
     /// base64 SHA-256 of the ML-KEM encapsulation key, when one exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pq: Option<String>,
+    /// base64 SHA-256 of the account's ML-DSA-65 signing key, when it publishes
+    /// one. Its presence is what makes this a v2 leaf. `skip_serializing_if`
+    /// keeps every previously written leaf byte-identical on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
     /// Unix seconds at which this key was recorded.
     pub at: u64,
 }
@@ -124,7 +164,20 @@ pub fn leaf_hash(leaf: &Leaf) -> [u8; 32] {
     let mut pq = [0u8; 32];
     rsa.copy_from_slice(&pad32(&rsa_hash));
     pq.copy_from_slice(&pad32(&pq_hash));
-    sha(&[LEAF_LABEL, &seq, &name_len, name, &rsa, &pq])
+    match leaf.sig.as_deref() {
+        // v2: the signing key is part of what the log commits to, so a client can
+        // tell whether the sender key it verifies against is the one the log
+        // witnessed. The stored value is already a SHA-256 (base64), so it is
+        // decoded and padded exactly like the rsa/pq fields above.
+        Some(sig_b64) => {
+            let sig_hash = STANDARD.decode(sig_b64).unwrap_or_else(|_| vec![0u8; 32]);
+            let sig = pad32(&sig_hash);
+            sha(&[LEAF_LABEL_V2, &seq, &name_len, name, &rsa, &pq, &sig])
+        }
+        // v1, byte-for-byte as it has always been. Every pinned head depends on
+        // this arm never changing.
+        None => sha(&[LEAF_LABEL, &seq, &name_len, name, &rsa, &pq]),
+    }
 }
 
 fn pad32(bytes: &[u8]) -> [u8; 32] {
@@ -290,26 +343,43 @@ fn rebuild(store: &mut Store) -> Result<(), String> {
     Ok(())
 }
 
-/// Record an account's current keys, if they differ from what the log already says.
+/// Whether the append path may touch the log.
 ///
-/// Called from every path that writes an account key. An unchanged key adds
-/// nothing: a log full of identical entries hides the changes that matter.
-pub fn record(account: &str, rsa_der: &[u8], pq_public_b64: Option<&str>) -> Result<(), String> {
-    // The test suite shares this working directory with the live app, so an
-    // unguarded append would let a fixture write leaves into the real log. The
-    // pure pieces — leaf hashing, roots, audit paths — are tested directly; the
-    // append path is exercised deliberately with KT_WRITE_IN_TESTS=1.
-    if cfg!(test) && std::env::var("KT_WRITE_IN_TESTS").is_err() {
-        return Ok(());
+/// The test suite shares this working directory with the live app, so an
+/// unguarded append would let a fixture write leaves into the real log. The
+/// pure pieces — leaf hashing, roots, audit paths — are tested directly; an
+/// append test either sets `KT_WRITE_IN_TESTS=1` or points the module at a
+/// scratch file, which is itself an explicit opt-in.
+fn writes_enabled() -> bool {
+    if !cfg!(test) {
+        return true;
     }
-    let rsa_hash = STANDARD.encode(sha(&[rsa_der]));
-    let pq_hash = pq_public_b64
-        .and_then(|b64| STANDARD.decode(b64).ok())
-        .map(|bytes| STANDARD.encode(sha(&[&bytes])));
+    #[cfg(test)]
+    if test_paths().is_some() {
+        return true;
+    }
+    std::env::var("KT_WRITE_IN_TESTS").is_ok()
+}
 
-    let mut store = read_store();
-    let previous = store.leaves.iter().rev().find(|leaf| leaf.account == account);
-    if let Some(leaf) = previous {
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Append a leaf unless the stored newest one already says the same thing.
+///
+/// An unchanged key adds nothing: a log full of identical entries hides the
+/// changes that matter.
+fn append_leaf(
+    store: &mut Store,
+    account: &str,
+    rsa_hash: String,
+    pq_hash: Option<String>,
+    sig: Option<String>,
+) -> Result<(), String> {
+    if let Some(leaf) = store.leaves.iter().rev().find(|leaf| leaf.account == account) {
         if leaf.rsa == rsa_hash && leaf.pq == pq_hash {
             return Ok(());
         }
@@ -320,10 +390,76 @@ pub fn record(account: &str, rsa_der: &[u8], pq_public_b64: Option<&str>) -> Res
         account: account.to_string(),
         rsa: rsa_hash,
         pq: pq_hash,
-        at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+        sig,
+        at: now_secs(),
+    });
+    rebuild(store)?;
+    write_store(store)
+}
+
+/// Record an account's current keys, if they differ from what the log already says.
+///
+/// Called from every path that writes an account key. A signing key published by
+/// `record_signing_key` is carried forward: this function is also the password and
+/// PQ-key change path, and dropping the field here would make the log claim the
+/// account has no signing key any more when it does.
+pub fn record(account: &str, rsa_der: &[u8], pq_public_b64: Option<&str>) -> Result<(), String> {
+    if !writes_enabled() {
+        return Ok(());
+    }
+    let rsa_hash = STANDARD.encode(sha(&[rsa_der]));
+    let pq_hash = pq_public_b64
+        .and_then(|b64| STANDARD.decode(b64).ok())
+        .map(|bytes| STANDARD.encode(sha(&[&bytes])));
+
+    let mut store = read_store();
+    let sig = store
+        .leaves
+        .iter()
+        .rev()
+        .find(|leaf| leaf.account == account)
+        .and_then(|leaf| leaf.sig.clone());
+    append_leaf(&mut store, account, rsa_hash, pq_hash, sig)
+}
+
+/// Record that an account has published an ML-DSA-65 signing key.
+///
+/// The leaf commits to `sha256(public key)` only — the tree stores hashes, and the
+/// key itself travels in the sidecar so a recipient can actually verify a signature.
+/// The newest rsa/pq hashes are reused, so publishing a signing key needs no access
+/// to the encryption key and does not pretend the other keys changed.
+pub fn record_signing_key(account: &str, sig_public_b64: &str) -> Result<(), String> {
+    if !writes_enabled() {
+        return Ok(());
+    }
+    let raw = STANDARD
+        .decode(sig_public_b64.trim())
+        .map_err(|_| "signing key is not base64".to_string())?;
+    if raw.is_empty() {
+        return Err("signing key is empty".to_string());
+    }
+    let sig_hash = STANDARD.encode(sha(&[&raw]));
+
+    let mut store = read_store();
+    let latest = store
+        .leaves
+        .iter()
+        .rev()
+        .find(|leaf| leaf.account == account)
+        .cloned()
+        .ok_or_else(|| "no key on file for this account; publish an encryption key first".to_string())?;
+    if latest.sig.as_deref() == Some(sig_hash.as_str()) {
+        // Republishing the same key must not grow the log.
+        return Ok(());
+    }
+    let seq = store.leaves.last().map(|l| l.seq + 1).unwrap_or(0);
+    store.leaves.push(Leaf {
+        seq,
+        account: account.to_string(),
+        rsa: latest.rsa,
+        pq: latest.pq,
+        sig: Some(sig_hash),
+        at: now_secs(),
     });
     rebuild(&mut store)?;
     write_store(&store)
@@ -338,20 +474,33 @@ pub fn record_for(account: &str, rsa_der: &[u8]) -> Result<(), String> {
 /// Record that an account no longer holds a key. An empty hash is not a missing
 /// entry: the log has to show the removal, or a later key would look like the first.
 pub fn record_removal(account: &str) -> Result<(), String> {
-    record(account, b"", None)
+    if !writes_enabled() {
+        return Ok(());
+    }
+    let mut store = read_store();
+    // Unlike `record`, a removal must not carry the signing key forward: the
+    // account no longer has one, and a reset client will publish a new key.
+    append_leaf(&mut store, account, STANDARD.encode(sha(&[b""])), None, None)
 }
 
 /// The same proof, shaped for a client: hashes, indices and a signed head, no keys.
 pub fn proof_json(account: &str) -> Option<serde_json::Value> {
     let (leaf, index, path, head) = proof(account)?;
+    let mut leaf_json = serde_json::json!({
+        "seq": leaf.seq,
+        "account": leaf.account,
+        "rsa": leaf.rsa,
+        "pq": leaf.pq,
+        "at": leaf.at,
+    });
+    // Only present on v2 leaves. A client recomputing the hash needs the field
+    // when it exists, and an older client that ignores it still gets the v1 shape
+    // for every leaf that predates signing keys.
+    if let Some(sig) = &leaf.sig {
+        leaf_json["sig"] = serde_json::json!(sig);
+    }
     Some(serde_json::json!({
-        "leaf": {
-            "seq": leaf.seq,
-            "account": leaf.account,
-            "rsa": leaf.rsa,
-            "pq": leaf.pq,
-            "at": leaf.at,
-        },
+        "leaf": leaf_json,
         "index": index,
         "path": path
             .iter()
@@ -659,6 +808,7 @@ mod tests {
             account: account.to_string(),
             rsa: STANDARD.encode([seed; 32]),
             pq: None,
+            sig: None,
             at: 1_700_000_000,
         }
     }
@@ -740,5 +890,134 @@ mod tests {
 
         let tampered = Head { root: STANDARD.encode([7u8; 32]), ..head };
         assert!(!verify_head(&tampered));
+    }
+
+    /// The v1 leaf hash written out independently of `leaf_hash`.
+    ///
+    /// This is the property the whole version split exists for: an older client
+    /// (or a pinned head) must compute exactly this for a leaf with no signing
+    /// key. If the implementation ever changes a field order, a label, or the
+    /// padding here, this fails.
+    fn v1_hash_inline(leaf: &Leaf) -> [u8; 32] {
+        let seq = (leaf.seq as u32).to_be_bytes();
+        let name = leaf.account.as_bytes();
+        let name_len = (name.len() as u16).to_be_bytes();
+        let rsa_hash = STANDARD.decode(&leaf.rsa).unwrap();
+        let pq_hash = leaf
+            .pq
+            .as_ref()
+            .and_then(|b64| STANDARD.decode(b64).ok())
+            .unwrap_or_else(|| vec![0u8; 32]);
+        let mut rsa = [0u8; 32];
+        let mut pq = [0u8; 32];
+        rsa.copy_from_slice(&pad32(&rsa_hash));
+        pq.copy_from_slice(&pad32(&pq_hash));
+        sha(&[b"kt/v1/leaf", &seq, &name_len, name, &rsa, &pq])
+    }
+
+    /// The v2 leaf hash written out independently: same fields, sig digest last.
+    fn v2_hash_inline(leaf: &Leaf) -> [u8; 32] {
+        let seq = (leaf.seq as u32).to_be_bytes();
+        let name = leaf.account.as_bytes();
+        let name_len = (name.len() as u16).to_be_bytes();
+        let rsa_hash = STANDARD.decode(&leaf.rsa).unwrap();
+        let pq_hash = vec![0u8; 32];
+        let sig_hash = STANDARD.decode(leaf.sig.as_deref().expect("v2 leaf")).unwrap();
+        let mut rsa = [0u8; 32];
+        let mut pq = [0u8; 32];
+        rsa.copy_from_slice(&pad32(&rsa_hash));
+        pq.copy_from_slice(&pad32(&pq_hash));
+        sha(&[b"kt/v2/leaf", &seq, &name_len, name, &rsa, &pq, &pad32(&sig_hash)])
+    }
+
+    #[test]
+    fn a_leaf_without_a_signing_key_hashes_exactly_as_v1() {
+        let l = leaf(3, "bob", 1);
+        // Inline recomputation of the pre-existing format.
+        assert_eq!(leaf_hash(&l), v1_hash_inline(&l));
+        // And a fixed vector, so both copies cannot drift together unnoticed.
+        assert_eq!(
+            hex::encode(leaf_hash(&l)),
+            "36f6c40578c445725224ef3c0695d53a8a2b0933cc4c6c6810fef088d5a2001a"
+        );
+    }
+
+    #[test]
+    fn a_leaf_with_a_signing_key_hashes_under_v2() {
+        let signed = Leaf {
+            sig: Some(STANDARD.encode([0xab; 32])),
+            ..leaf(3, "bob", 1)
+        };
+        assert_eq!(leaf_hash(&signed), v2_hash_inline(&signed));
+        // The two formats must not collide: the same fields under the old label
+        // would be a different encoding masquerading as v1.
+        assert_ne!(leaf_hash(&signed), v1_hash_inline(&signed));
+        assert_ne!(leaf_hash(&signed), leaf_hash(&leaf(3, "bob", 1)));
+    }
+
+    /// Appends a leaf into a scratch directory, never `data/keylog.json`.
+    fn with_scratch<F: FnOnce()>(f: F) {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("kt-sig-{}-{}", std::process::id(), id));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        TEST_PATHS.with(|p| {
+            *p.borrow_mut() = Some((dir.join("keylog.json"), dir.join("ktkey.json")));
+        });
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        TEST_PATHS.with(|p| *p.borrow_mut() = None);
+        let _ = std::fs::remove_dir_all(&dir);
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    #[test]
+    fn a_key_change_carries_the_signing_key_forward() {
+        with_scratch(|| {
+            record("bob", b"rsa-one", None).expect("first record");
+            record_signing_key("bob", &STANDARD.encode([9u8; 1952])).expect("publish sig");
+            let published = STANDARD.encode(sha(&[[9u8; 1952].as_slice()]));
+            assert_eq!(
+                read_store().leaves.last().unwrap().sig.as_deref(),
+                Some(published.as_str())
+            );
+
+            // Password reset / key rotation: a different RSA key, same account.
+            record("bob", b"rsa-two", None).expect("rotation");
+            let store = read_store();
+            let latest = store.leaves.last().expect("a leaf");
+            assert_eq!(latest.account, "bob");
+            assert_ne!(latest.rsa, STANDARD.encode(sha(&[b"rsa-one"])));
+            assert_eq!(
+                latest.sig.as_deref(),
+                Some(published.as_str()),
+                "a key rotation must not silently drop the signing key"
+            );
+            assert!(verify_head(&store.head.expect("head")));
+        });
+    }
+
+    #[test]
+    fn republishing_the_same_signing_key_is_a_no_op() {
+        with_scratch(|| {
+            let sig = STANDARD.encode([3u8; 1952]);
+            record("bob", b"rsa", None).expect("first record");
+            record_signing_key("bob", &sig).expect("publish sig");
+            let size = read_store().leaves.len();
+            let head_size = read_store().head.expect("head").size;
+
+            record_signing_key("bob", &sig).expect("publish sig again");
+            assert_eq!(read_store().leaves.len(), size, "the log must not grow");
+            assert_eq!(read_store().head.expect("head").size, head_size);
+        });
+    }
+
+    #[test]
+    fn a_signing_key_without_a_key_leaf_is_refused() {
+        with_scratch(|| {
+            let err = record_signing_key("nobody", &STANDARD.encode([1u8; 1952]));
+            assert!(err.is_err(), "there is no rsa/pq hash to reuse");
+        });
     }
 }

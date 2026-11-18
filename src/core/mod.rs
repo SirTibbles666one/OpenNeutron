@@ -36,5 +36,6 @@ pub mod push;
 pub mod mailboxlog;
 pub mod keylog;
 pub mod pqkeys;
+pub mod sigkeys;
 pub mod geoip;
 pub mod webauthn;

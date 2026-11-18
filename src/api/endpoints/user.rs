@@ -526,6 +526,9 @@ pub fn reset_with_token(
     if let Err(e) = crate::core::keylog::record_removal(&username) {
         log::warn!("[Recovery] key transparency did not record the removal of '{}': {}", username, e);
     }
+    if let Err(e) = crate::core::sigkeys::remove(&username) {
+        log::warn!("[Recovery] could not drop the signing key of '{}': {}", username, e);
+    }
     let _ = recovery.clear_token(&username);
     log::info!("[Recovery] Password reset completed for '{}'", username);
 

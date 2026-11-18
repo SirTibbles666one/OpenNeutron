@@ -71,15 +71,21 @@ pub fn proof(
     match keylog::proof(&req.username) {
         Some((leaf, index, path, head)) => {
             let path: Vec<String> = path.iter().map(|node| STANDARD.encode(node)).collect();
+            let mut leaf_json = json!({
+                "seq": leaf.seq,
+                "account": leaf.account,
+                "rsa": leaf.rsa,
+                "pq": leaf.pq,
+                "at": leaf.at,
+            });
+            // Present only on a v2 leaf: the client needs it to recompute the
+            // hash, and its absence is what keeps a v1 proof byte-identical.
+            if let Some(sig) = &leaf.sig {
+                leaf_json["sig"] = json!(sig);
+            }
             json_response(
                 json!({
-                    "leaf": {
-                        "seq": leaf.seq,
-                        "account": leaf.account,
-                        "rsa": leaf.rsa,
-                        "pq": leaf.pq,
-                        "at": leaf.at,
-                    },
+                    "leaf": leaf_json,
                     "index": index,
                     "path": path,
                     "head": {

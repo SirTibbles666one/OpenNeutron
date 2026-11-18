@@ -20,3 +20,4 @@ pub mod notes;
 pub mod import;
 pub mod log;
 pub mod pqkeys;
+pub mod sigkey;

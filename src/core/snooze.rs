@@ -149,7 +149,9 @@ mod tests {
     #[test]
     fn a_snooze_in_the_future_is_away_and_a_past_one_is_not() {
         let path = std::env::temp_dir().join(format!("snooze-{}-{}.json", std::process::id(), now()));
-        std::env::set_var("SNOOZE_PATH", &path);
+        // Unsafe in edition 2024 for the usual reason: the environment is
+        // process-global. This is the module's only test.
+        unsafe { std::env::set_var("SNOOZE_PATH", &path) };
         let t = now();
         set("alice", 7, t + 60).unwrap();
         set("alice", 9, t - 60).unwrap();

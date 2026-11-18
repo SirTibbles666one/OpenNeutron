@@ -475,6 +475,12 @@ pub struct RecipientPublicKey {
     /// possible where both halves exist, and a sender must never guess.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pq_public_key: Option<String>,
+    /// ML-DSA-65 verifying key, base64 (~1.9 KB), for accounts that publish one.
+    /// A sender needs the whole key to verify a signature; the key-transparency
+    /// leaf only commits to its hash. Absent means the recipient cannot receive
+    /// signed mail yet, and a sender must fall back rather than guess.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sig_key: Option<String>,
     /// Key-transparency proof for this recipient: their leaf and the audit path
     /// that binds it to a signed head. A sender that checks it is not trusting
     /// this answer — that is the whole point of sending it.
@@ -757,6 +763,7 @@ mod public_key_shape {
             public_key: Some("rsa".into()),
             key_type: "openneutron-1".into(),
             pq_public_key: pq.map(str::to_string),
+            sig_key: None,
             proof: None,
         }
     }
@@ -776,5 +783,19 @@ mod public_key_shape {
     fn a_recipient_with_pq_material_carries_the_encapsulation_key() {
         let json = serde_json::to_string(&key(Some("eks"))).unwrap();
         assert!(json.contains("eks"), "{json}");
+    }
+
+    /// A signing key is only advertised when the account published one: a sender
+    /// must fall back to an unsigned/sender-unverified message, not guess.
+    #[test]
+    fn a_signing_key_is_published_only_when_present() {
+        let absent = serde_json::to_string(&key(None)).unwrap();
+        assert!(!absent.contains("sig_key"), "{absent}");
+
+        let with_sig = RecipientPublicKey {
+            sig_key: Some("mldsa".into()),
+            ..key(None)
+        };
+        assert!(serde_json::to_string(&with_sig).unwrap().contains("mldsa"));
     }
 }

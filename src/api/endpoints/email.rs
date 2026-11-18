@@ -3,7 +3,7 @@ use tiny_http::{Request, Response};
 use std::sync::Arc;
 use std::io::Cursor;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use crate::core::{pqkeys, UserStorage, EmailStorage, User};
+use crate::core::{pqkeys, sigkeys, UserStorage, EmailStorage, User};
 use crate::utils::unix_to_iso;
 use crate::api::dto::{
     GetEmailRequest, EmailBytesResponse, GetEmailsBulkRequest, EmailsBulkResponse,
@@ -856,6 +856,9 @@ pub fn get_public_keys(
                 });
                 let key_type = if pk.is_some() { "openneutron-1" } else { "none" };
                 let pq_public_key = pqkeys::get(username).map(|k| k.public_key);
+                // The verifying key itself, not just its logged hash: a sender
+                // cannot check a signature against a hash.
+                let sig_key = sigkeys::get(username).map(|k| k.public_key);
                 // Sent with the key so a sender can check the directory instead of
                 // believing it. Absent only when the account has no key to log.
                 let proof = crate::core::keylog::proof_json(username);
@@ -864,6 +867,7 @@ pub fn get_public_keys(
                     public_key: pk,
                     key_type: key_type.to_string(),
                     pq_public_key,
+                    sig_key,
                     proof,
                 });
             } else {
@@ -878,6 +882,7 @@ pub fn get_public_keys(
                 public_key: None,
                 key_type: "none".to_string(),
                     pq_public_key: None,
+                    sig_key: None,
                     proof: None,
             });
         }
@@ -897,6 +902,7 @@ pub fn get_public_keys(
                                     public_key: Some(kb),
                                     key_type: kt,
                     pq_public_key: None,
+                    sig_key: None,
                     proof: None,
                                 });
                             }
@@ -906,6 +912,7 @@ pub fn get_public_keys(
                                     public_key: None,
                                     key_type: "none".to_string(),
                     pq_public_key: None,
+                    sig_key: None,
                     proof: None,
                                 });
                             }
@@ -922,6 +929,7 @@ pub fn get_public_keys(
                     public_key: None,
                     key_type: "none".to_string(),
                     pq_public_key: None,
+                    sig_key: None,
                     proof: None,
                 });
             }
@@ -934,6 +942,7 @@ pub fn get_public_keys(
             public_key: None,
             key_type: "none".to_string(),
                     pq_public_key: None,
+                    sig_key: None,
                     proof: None,
         })
     }).collect();

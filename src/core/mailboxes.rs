@@ -197,7 +197,10 @@ mod tests {
 
     fn temp_store() -> String {
         let path = std::env::temp_dir().join(format!("mailboxes-{}-{}.json", std::process::id(), now()));
-        std::env::set_var("MAILBOXES_PATH", &path);
+        // `set_var` is unsafe in edition 2024: another thread reading the
+        // environment concurrently would be undefined behaviour. This module has
+        // one test, and it is the only thing touching the variable.
+        unsafe { std::env::set_var("MAILBOXES_PATH", &path) };
         let _ = fs::remove_file(&path);
         path.to_string_lossy().into_owned()
     }
