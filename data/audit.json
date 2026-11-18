@@ -296,6 +296,78 @@
       "detail": "",
       "prev": "24bb56caeb1bd1cc112cb7c6a0b840d39c8843d52b505295c1c644634a315a63",
       "hash": "159cfa18dafcb4acaa1e78dfd5d97cd2cd2d3e87532a3c43bd26fb48acc44d05"
+    },
+    {
+      "at": 1795024015,
+      "actor": "tibs",
+      "action": "audit.read",
+      "target": "",
+      "detail": "",
+      "prev": "159cfa18dafcb4acaa1e78dfd5d97cd2cd2d3e87532a3c43bd26fb48acc44d05",
+      "hash": "f5c65525093cae11ac5a1846ee8db2d8d24a2c5820185f170cb5c5ec373dba24"
+    },
+    {
+      "at": 1795024021,
+      "actor": "tibs",
+      "action": "audit.read",
+      "target": "",
+      "detail": "",
+      "prev": "f5c65525093cae11ac5a1846ee8db2d8d24a2c5820185f170cb5c5ec373dba24",
+      "hash": "799d7e08aa931e142de0f9ded1b64adddc8e4210ba2f54e81ada26cd760c13f5"
+    },
+    {
+      "at": 1795024099,
+      "actor": "tibs",
+      "action": "audit.read",
+      "target": "",
+      "detail": "",
+      "prev": "799d7e08aa931e142de0f9ded1b64adddc8e4210ba2f54e81ada26cd760c13f5",
+      "hash": "38c7643756dabfc1707778477db1f0871a3b448109e3dcc4f9d6e2e93300c963"
+    },
+    {
+      "at": 1795024125,
+      "actor": "tibs",
+      "action": "user.unsuspend",
+      "target": "penis",
+      "detail": "switched back on from the admin panel",
+      "prev": "38c7643756dabfc1707778477db1f0871a3b448109e3dcc4f9d6e2e93300c963",
+      "hash": "974bf7f41e3b890b99117cb1893862afcebf385ceaf41c98c8df9a2d51d7c28a"
+    },
+    {
+      "at": 1795024141,
+      "actor": "tibs",
+      "action": "user.delete",
+      "target": "penis",
+      "detail": "",
+      "prev": "974bf7f41e3b890b99117cb1893862afcebf385ceaf41c98c8df9a2d51d7c28a",
+      "hash": "b71fc07aa1d49e7e6e764cf8016f2c2c2f6c29c5a16acfb19618bee9dc1c594c"
+    },
+    {
+      "at": 1795024418,
+      "actor": "tibs",
+      "action": "audit.read",
+      "target": "",
+      "detail": "",
+      "prev": "b71fc07aa1d49e7e6e764cf8016f2c2c2f6c29c5a16acfb19618bee9dc1c594c",
+      "hash": "39a23f007db050cd946cf7844e74f843efdbad1c612476ec66e56fc20600ee0f"
+    },
+    {
+      "at": 1795024460,
+      "actor": "tibs",
+      "action": "audit.read",
+      "target": "",
+      "detail": "",
+      "prev": "39a23f007db050cd946cf7844e74f843efdbad1c612476ec66e56fc20600ee0f",
+      "hash": "8bbdd8a3edcc27ac309a4e69f513137717a7d7af00075b0e3b1d4f288278afb3"
+    },
+    {
+      "at": 1795024481,
+      "actor": "tibs",
+      "action": "audit.read",
+      "target": "",
+      "detail": "",
+      "prev": "8bbdd8a3edcc27ac309a4e69f513137717a7d7af00075b0e3b1d4f288278afb3",
+      "hash": "f6e25c17386b75646caa14df444393167b8d2e731b88cd69a5016c9d7f97b5a7"
     }
   ]
 }

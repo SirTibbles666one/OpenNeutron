@@ -232,6 +232,14 @@ pub enum Open {
 /// The record itself stays (without the ciphertext) so the sender can be told
 /// what happened to their note. Clearing and serving are the same lock, so two
 /// simultaneous opens cannot both receive the body.
+/// How long a note stays readable after its first serve.
+///
+/// Single-use is a promise to the sender, not a reason to destroy a message the recipient
+/// could not read: a wrong client, a broken page or a stray tap must not cost them the note.
+/// The page burns it the moment the armour is on screen; this window is what covers the case
+/// where it never got that far.
+pub const GRACE_SECONDS: u64 = 900;
+
 pub fn open(token: &str) -> io::Result<Open> {
     let _held = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let path = path();
@@ -275,9 +283,19 @@ pub fn open(token: &str) -> io::Result<Open> {
         return Ok(Open::Served(served));
     }
 
-    note.armored.clear();
-    note.files.clear();
-    note.opened_at = Some(now);
+    // PGP mode. The armour stays in the store for the grace window and the page burns it
+    // once it has rendered: serving used to clear it, so a failed open destroyed the note.
+    if let Some(first) = note.opened_at {
+        if now.saturating_sub(first) > GRACE_SECONDS {
+            note.armored.clear();
+            note.files.clear();
+            write_at(&path, &store)?;
+            return Ok(Open::Spent);
+        }
+    } else {
+        note.opened_at = Some(now);
+    }
+    note.opens = note.opens.saturating_add(1);
     write_at(&path, &store)?;
     Ok(Open::Served(served))
 }

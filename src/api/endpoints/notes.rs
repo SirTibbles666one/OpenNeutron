@@ -728,6 +728,13 @@ btn.addEventListener('click', async () => {
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     });
+    // The armour is on screen, so the note has done its job. Until this call the server
+    // keeps it for a few minutes in case the page never got this far.
+    fetch('/api/note/burn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: '__TOKEN__' }),
+    }).catch(() => {});
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Try again';
     document.getElementById('msg').textContent = e.message;
@@ -838,7 +845,8 @@ fn render_sealed(subject: &str, from: &str, to: &str, expiry: &str, token: &str,
              <p class="warn">The phrase travels separately from this email — ask the sender if you do not have it.</p>
            </div>"#
     } else {
-        r#"<button id="reveal">Open the note</button>"#
+        r#"<button id="reveal">Open the note</button>
+             <p class="warn">This note can be opened once. What appears is PGP armour for your key: copy it or download the .asc, and your mail client or <code>gpg --decrypt</code> will read it.</p>"#
     };
 
     let out = if mode == "passphrase" {
