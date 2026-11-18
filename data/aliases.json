@@ -5,28 +5,32 @@
       "label": "Administration",
       "created_at": 1793225135,
       "disabled_at": null,
-      "received": 0
+      "received": 0,
+      "owner": ""
     },
     "brisk-badger-375": {
       "username": "admintest",
       "label": "",
       "created_at": 1793203035,
       "disabled_at": null,
-      "received": 0
+      "received": 0,
+      "owner": ""
     },
     "contact": {
       "username": "tibs",
       "label": "General contact",
       "created_at": 1793408125,
       "disabled_at": null,
-      "received": 0
+      "received": 0,
+      "owner": ""
     },
-    "customer-support": {
-      "username": "tibs",
-      "label": "Customer support",
-      "created_at": 1793207202,
+    "qa-shop2": {
+      "username": "qatester2",
+      "label": "shop",
+      "created_at": 1794713856,
       "disabled_at": null,
-      "received": 1
+      "received": 1,
+      "owner": "qatester2"
     }
   }
 }

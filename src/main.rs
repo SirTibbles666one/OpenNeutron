@@ -576,6 +576,7 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     // needs to verify a signature; the key-transparency log commits to its hash.
     router.add_route(Method::Get,       "/api/user/sigkey",     Authenticated, endpoints::sigkey::get);
     router.add_route(Method::Post,      "/api/user/sigkey",     Authenticated, endpoints::sigkey::set);
+    router.add_route(Method::Post,      "/api/spam/report",      Authenticated, endpoints::spam::report);
     // Work list for re-sealing mail stored before post-quantum protection.
     router.add_route(Method::Get,       "/api/pq/migration",      Authenticated, endpoints::pqkeys::migration);
     // Deletion log: what left the mailbox, in a chain the client can check.

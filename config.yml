@@ -15,7 +15,7 @@ server:
   # served from this same server, so it needs no entry here. Never use "*".
   cors_allowed_origins: []
   # Maximum API request body size in bytes (bodies are buffered in memory).
-  max_request_body_bytes: 26214400
+  max_request_body_bytes: 41943040
 
 storage:
   users_file: "data/users.bin"

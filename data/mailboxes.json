@@ -1,0 +1,15 @@
+{
+  "accounts": {
+    "qa": [],
+    "qatester2": [
+      {
+        "name": "Shop",
+        "addresses": [
+          "qa-shop2@slothlee.xyz"
+        ],
+        "created": 1794713904
+      }
+    ],
+    "tibs": []
+  }
+}

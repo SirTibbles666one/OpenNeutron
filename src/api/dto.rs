@@ -237,6 +237,7 @@ pub struct GetEmailRequest {
 
 #[derive(Serialize)]
 pub struct EmailBytesResponse {
+    #[serde(serialize_with = "crate::api::u128_string::serialize")]
     pub uid: u128,
     /// Server-side state, so a new device does not invent its own read/starred
     /// flags and show a different mailbox than the one you already read.
@@ -270,6 +271,7 @@ pub struct EmailBytesResponse {
 
 #[derive(Serialize)]
 pub struct EmailFlagResponse {
+    #[serde(serialize_with = "crate::api::u128_string::serialize")]
     pub uid: u128,
     pub read: bool,
     pub starred: bool,
@@ -293,6 +295,7 @@ pub struct EmailsBulkResponse {
 
 #[derive(Serialize)]
 pub struct EmailUidsResponse {
+    #[serde(serialize_with = "crate::api::u128_string::serialize_vec")]
     pub uids: Vec<u128>,
 }
 
@@ -302,6 +305,7 @@ pub struct EmailUidsResponse {
 /// instead of quietly seeing a shortened inbox.
 #[derive(Serialize)]
 pub struct EmailUidsPage {
+    #[serde(serialize_with = "crate::api::u128_string::serialize_vec")]
     pub uids: Vec<u128>,
     pub total: usize,
     pub offset: usize,
@@ -399,6 +403,7 @@ pub struct SetEmailStarredRequest {
 pub struct GroupDto {
     pub uid: String,
     pub title: String,
+    #[serde(serialize_with = "crate::api::u128_string::serialize_vec")]
     pub email_uids: Vec<u128>,
     pub filter_addresses: Vec<String>,
 }
@@ -582,6 +587,7 @@ impl EphemeralPolicy {
 /// Status of a deleting message, from either side.
 #[derive(Serialize)]
 pub struct EphemeralStatusItem {
+    #[serde(serialize_with = "crate::api::u128_string::serialize")]
     pub uid: u128,
     /// "armed" (waiting to be read or to expire) or "read" (recipient's copy gone).
     pub state: String,

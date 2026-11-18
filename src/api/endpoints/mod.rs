@@ -1,3 +1,4 @@
+pub mod spam;
 pub mod auth;
 pub mod user;
 pub mod twofactor;
