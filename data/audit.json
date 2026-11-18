@@ -242,6 +242,33 @@
       "detail": "",
       "prev": "4ef61bb3d2b1612c3e1ede1e5728bcf53f80e138c8b90440ab7f627bd7258f0c",
       "hash": "abcd7c244df6efc47e20b6fe7021945abefaef41ecb180261d76542da2d8f27f"
+    },
+    {
+      "at": 1795020700,
+      "actor": "tibs",
+      "action": "user.key.add",
+      "target": "tibs",
+      "detail": "Yubikey 1",
+      "prev": "abcd7c244df6efc47e20b6fe7021945abefaef41ecb180261d76542da2d8f27f",
+      "hash": "d6d05162092460442d11394eda7531cf8c139d91c4a0116349b9e83ea5603d50"
+    },
+    {
+      "at": 1795020840,
+      "actor": "tibs",
+      "action": "user.delete",
+      "target": "admintest",
+      "detail": "",
+      "prev": "d6d05162092460442d11394eda7531cf8c139d91c4a0116349b9e83ea5603d50",
+      "hash": "20b6374d1fcebf82ae9f368052013baac484ed3b2e097cc6650c1dfc3bc656f4"
+    },
+    {
+      "at": 1795020844,
+      "actor": "tibs",
+      "action": "audit.read",
+      "target": "",
+      "detail": "",
+      "prev": "20b6374d1fcebf82ae9f368052013baac484ed3b2e097cc6650c1dfc3bc656f4",
+      "hash": "145eecad641f975ce5a88d9f24ea1cb08f9174deeeab348257d0802f3cabadfb"
     }
   ]
 }

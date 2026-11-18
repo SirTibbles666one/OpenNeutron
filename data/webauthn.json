@@ -1,1 +1,13 @@
-{}
+{
+  "tibs": [
+    {
+      "id": "C1m3IHnavQsDoGDBO8IQJOPX74NsQ1PjY7lws6sJituUmyoUu0n-QUkLa7N4OF-_WZ61CeJqGRXgCyhimifPjQ",
+      "public_key": "pQECAyYgASFYINstpCgkZ6o2XMmrB4ww9PjVFPiZYzb3EvCPPs6ie1j6IlggTVOue3XcBLXZ4NfIsA7yiFWa+TJJ0dQsAUUcLfFYO50=",
+      "alg": -7,
+      "sign_count": 8,
+      "name": "Yubikey 1",
+      "created_at": 1795020700,
+      "last_used_at": 1795020775
+    }
+  ]
+}

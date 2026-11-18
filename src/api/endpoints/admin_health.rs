@@ -60,7 +60,28 @@ pub fn health(
             }))
         });
 
+    // The off-site backup, as of the last host tick. A missing or stale snapshot reports as
+    // unavailable rather than as healthy: this is the one figure that must never be assumed.
+    let backup = std::fs::read_to_string("data/backup-status.json")
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| {
+            let at = value.get("at").and_then(|v| v.as_u64()).unwrap_or(0);
+            if at == 0 {
+                return None;
+            }
+            Some(json!({
+                "at": at,
+                "age_hours": now.saturating_sub(at) / 3600,
+                "name": value.get("name").cloned().unwrap_or(json!("")),
+                "size": value.get("size").cloned().unwrap_or(json!(0)),
+                "parts": value.get("parts").cloned().unwrap_or(json!(1)),
+                "stale": now.saturating_sub(at) > 36 * 3600,
+            }))
+        });
+
     let payload = json!({
+        "backup": backup,
         "as_of": now,
         "rspamd": rspamd,
         "rspamd_error": rspamd_error,
