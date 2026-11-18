@@ -766,3 +766,64 @@ mod tests {
         assert_eq!(epoch_to_date(1_793_404_800), "2026-10-31");
     }
 }
+
+/// Reporter-level totals over the last `days` days, newest activity first.
+///
+/// The stored record keeps what the report *said*, not the raw XML, so this is per reporter
+/// rather than per source IP. Per-IP would need the raw report kept beside it; that is a
+/// different trade (storing third-party mail bodies), and not one to make silently.
+pub fn summary(days: u64) -> serde_json::Value {
+    let now_ts = crate::core::audit::now();
+    let cutoff = now_ts.saturating_sub(days * 86_400);
+    let mut rows: std::collections::BTreeMap<(String, String), (u64, u64, u64)> =
+        std::collections::BTreeMap::new();
+
+    if let Ok(text) = std::fs::read_to_string(RECORD_FILE) {
+        for line in text.lines() {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let seen = value.get("seen_at").and_then(|v| v.as_u64()).unwrap_or(0);
+            if seen < cutoff {
+                continue;
+            }
+            let reporter = value
+                .get("reporter")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let kind = value
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("dmarc")
+                .to_string();
+            let total = value.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+            let failures = value.get("failures").and_then(|v| v.as_u64()).unwrap_or(0);
+            let entry = rows.entry((reporter, kind)).or_insert((0, 0, 0));
+            entry.0 += total;
+            entry.1 += failures;
+            entry.2 = entry.2.max(seen);
+        }
+    }
+
+    let mut out: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|((reporter, kind), (total, failures, last))| {
+            serde_json::json!({
+                "reporter": reporter,
+                "kind": kind,
+                "messages": total,
+                "failures": failures,
+                "last_seen": last,
+            })
+        })
+        .collect();
+    // Most failures first: the point of the table is who is failing you, not who writes most.
+    out.sort_by(|a, b| {
+        let fa = a.get("failures").and_then(|v| v.as_u64()).unwrap_or(0);
+        let fb = b.get("failures").and_then(|v| v.as_u64()).unwrap_or(0);
+        fb.cmp(&fa)
+    });
+
+    serde_json::json!({ "days": days, "as_of": now_ts, "rows": out })
+}

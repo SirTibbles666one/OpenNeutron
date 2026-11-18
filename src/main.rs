@@ -602,6 +602,7 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Post,      "/api/spam/report",      Authenticated, endpoints::spam::report);
     router.add_route(Method::Post,      "/api/admin/audit",      Staff, endpoints::audit_admin::list);
     router.add_route(Method::Post,      "/api/admin/mail-health", Staff, endpoints::admin_health::health);
+    router.add_route(Method::Post,      "/api/admin/dmarc",       Staff, endpoints::admin_dmarc::list);
     // Work list for re-sealing mail stored before post-quantum protection.
     router.add_route(Method::Get,       "/api/pq/migration",      Authenticated, endpoints::pqkeys::migration);
     // Deletion log: what left the mailbox, in a chain the client can check.

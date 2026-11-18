@@ -1,3 +1,4 @@
+pub mod admin_dmarc;
 pub mod admin_health;
 pub mod audit_admin;
 pub mod spam;
