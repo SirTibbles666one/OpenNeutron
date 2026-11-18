@@ -267,6 +267,7 @@ pub fn delete_user(
 
     erase_account(&user_storage, &email_storage, &username);
     log::info!("[Admin] '{}' deleted account '{}'", caller.username, username);
+    let _ = crate::core::audit::append(&caller.username, "user.delete", &username, "");
     let msg = serde_json::to_vec(&MessageResponse { message: "User deleted".into() }).unwrap();
     Response::from_data(msg).with_status_code(200).with_header(json_header())
 }
@@ -332,6 +333,8 @@ pub fn set_credentials(
         log::warn!("[Admin] Failed to persist after set_credentials: {}", e);
     }
     log::info!("[Admin] '{}' updated credentials for '{}'", caller.username, username);
+    // The value never goes in the record — that it changed is the whole point.
+    let _ = crate::core::audit::append(&caller.username, "user.credentials", &username, "");
 
     let resp = AdminResetResponse {
         message: "Credentials updated".into(),
@@ -376,6 +379,14 @@ pub fn set_admin(
     log::info!(
         "[Admin] '{}' set is_admin={} for '{}'",
         caller.username, req.is_admin, username
+    );
+    // Granting admin is the single most consequential action in this panel: it hands over
+    // everything else. It is recorded whether it is granted or revoked.
+    let _ = crate::core::audit::append(
+        &caller.username,
+        if req.is_admin { "user.admin.grant" } else { "user.admin.revoke" },
+        &username,
+        "",
     );
 
     let msg = serde_json::to_vec(&MessageResponse { message: "Admin status updated".into() }).unwrap();
@@ -463,6 +474,14 @@ pub fn set_recovery_address(
         caller.username,
         username,
         cleared.as_deref().unwrap_or("(none)")
+    );
+    // A recovery address redirects account recovery, so who set it matters as much as who
+    // changed a password. The address itself is recorded: that is the fact worth auditing.
+    let _ = crate::core::audit::append(
+        &caller.username,
+        "user.recovery.set",
+        &username,
+        cleared.as_deref().unwrap_or("(cleared)"),
     );
 
     let body = serde_json::to_vec(&AdminRecoveryAddressResponse {
@@ -651,6 +670,7 @@ pub fn approve_pending(
     match crate::core::pending_users::remove(&username) {
         Ok(true) => {
             log::info!("[Admin] Approved account '{}' (by '{}')", username, caller.username);
+            let _ = crate::core::audit::append(&caller.username, "pending.approve", &username, "");
             let body = serde_json::to_vec(&PendingApproveResponse {
                 username,
                 approved: true,
@@ -703,6 +723,7 @@ pub fn deny_pending(
     // erase_account() clears the queue entry along with the account.
     erase_account(&user_storage, &email_storage, &username);
     log::info!("[Admin] '{}' denied account '{}'", caller.username, username);
+    let _ = crate::core::audit::append(&caller.username, "pending.deny", &username, "");
 
     let msg = serde_json::to_vec(&MessageResponse {
         message: "Account request denied and account removed".into(),
@@ -767,6 +788,15 @@ pub fn suspend(
             } else {
                 log::info!("[Admin] '{}' switched back on by '{}'", username, caller.username);
             }
+            // Outside the branch: switching an account OFF is the action that locks someone
+            // out, so it must be recorded too — my first version put this in the `else` and
+            // only unsuspensions were ever logged.
+            let _ = crate::core::audit::append(
+                &caller.username,
+                if state { "user.suspend" } else { "user.unsuspend" },
+                &username,
+                req.reason.trim(),
+            );
             Response::from_data(
                 serde_json::to_vec(&json!({
                     "username": username,
