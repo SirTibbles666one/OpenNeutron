@@ -32,6 +32,7 @@ pub mod scheduled;
 pub mod ephemeral;
 pub mod trash;
 pub mod junk;
+pub mod subject_rules;
 pub mod notes;
 pub mod push;
 pub mod mailboxlog;

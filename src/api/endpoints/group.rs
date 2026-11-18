@@ -24,7 +24,20 @@ pub fn list_groups(
         }
     };
 
-    let resp = GroupsListResponse { groups: user.groups.iter().map(GroupDto::from).collect() };
+    // Subject rules live in a sidecar (see core::subject_rules), so they are folded in
+    // here rather than coming from the bincode `Group`.
+    let subjects = crate::core::subject_rules::all(&user.username);
+    let resp = GroupsListResponse {
+        groups: user
+            .groups
+            .iter()
+            .map(|g| {
+                let mut dto = GroupDto::from(g);
+                dto.filter_subjects = subjects.get(&g.uid).cloned().unwrap_or_default();
+                dto
+            })
+            .collect(),
+    };
     let body = serde_json::to_vec(&resp).unwrap();
     Response::from_data(body).with_status_code(200).with_header(json_header())
 }
@@ -129,11 +142,25 @@ pub fn update_group(
 
     user_storage.update_group(&user.username, updated.clone());
 
+    // `None` means the caller is an older client that knows nothing about subjects — do
+    // not treat that as "clear the rules this person configured".
+    let subjects_now = match req.filter_subjects {
+        Some(list) => {
+            if let Err(e) = crate::core::subject_rules::set(&user.username, updated.uid, list) {
+                log::warn!("[API] Could not save subject rules: {}", e);
+            }
+            crate::core::subject_rules::get(&user.username, updated.uid)
+        }
+        None => crate::core::subject_rules::get(&user.username, updated.uid),
+    };
+
     if let Err(e) = user_storage.save_to_file() {
         log::warn!("[API] Failed to persist after group update: {}", e);
     }
 
-    let body = serde_json::to_vec(&GroupDto::from(&updated)).unwrap();
+    let mut dto = GroupDto::from(&updated);
+    dto.filter_subjects = subjects_now;
+    let body = serde_json::to_vec(&dto).unwrap();
     Response::from_data(body).with_status_code(200).with_header(json_header())
 }
 

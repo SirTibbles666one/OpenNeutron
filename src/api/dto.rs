@@ -409,6 +409,9 @@ pub struct GroupDto {
     #[serde(serialize_with = "crate::api::u128_string::serialize_vec")]
     pub email_uids: Vec<u128>,
     pub filter_addresses: Vec<String>,
+    /// Filled from the sidecar store, not from the bincode `Group`.
+    #[serde(default)]
+    pub filter_subjects: Vec<String>,
 }
 
 impl From<&Group> for GroupDto {
@@ -418,6 +421,7 @@ impl From<&Group> for GroupDto {
             title: g.title.clone(),
             email_uids: g.email_uids.clone(),
             filter_addresses: g.filter_addresses.clone(),
+            filter_subjects: Vec::new(),
         }
     }
 }
@@ -445,6 +449,10 @@ pub struct UpdateGroupRequest {
     pub uid: u128,
     pub title: Option<String>,
     pub filter_addresses: Option<Vec<String>>,
+    /// Substring rules matched against the subject on delivery. Absent means "leave them"
+    /// rather than "clear them", so an old client cannot wipe rules it does not know about.
+    #[serde(default)]
+    pub filter_subjects: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]

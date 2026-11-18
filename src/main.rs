@@ -470,6 +470,23 @@ fn handle_smtp_connection(
                             &[received.from.as_str(), header_from],
                         );
 
+                        // Subject rules run here, on delivery, because this is the only
+                        // moment the server can see a subject: the message is encrypted
+                        // immediately afterwards and never readable again.
+                        let header_subject = received
+                            .headers
+                            .iter()
+                            .find(|(name, _)| name.eq_ignore_ascii_case("subject"))
+                            .map(|(_, value)| value.as_str())
+                            .unwrap_or("");
+                        if !header_subject.is_empty() {
+                            for (group_uid, rules) in core::subject_rules::all(username) {
+                                if core::subject_rules::matches(header_subject, &rules) {
+                                    user_storage.add_email_to_group(username, group_uid, email.uid);
+                                }
+                            }
+                        }
+
                         // Remember the door it came through, so a reply can go back
                         // out from the same address rather than the owner's real one.
                         if alias_owner.is_some() {
