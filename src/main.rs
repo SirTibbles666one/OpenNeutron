@@ -122,6 +122,10 @@ fn main() -> Result<()> {
         thread::spawn(move || loop {
             crate::core::ephemeral::sweep(&sweeper_users, &sweeper_mail);
             crate::core::trash::sweep(&sweeper_users, &sweeper_mail);
+            // Junk ages out the same way the trash does; without this it would be a
+            // second inbox nobody empties, and the filter would keep learning from
+            // messages from a different year.
+            crate::core::junk::sweep(&sweeper_users, &sweeper_mail);
             crate::core::notes::sweep();
             // Sessions age out on their own: the registry had no upper bound, so a
             // copied cookie outlived the device it was copied from.

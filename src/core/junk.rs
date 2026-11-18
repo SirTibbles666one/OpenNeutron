@@ -24,6 +24,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const STORE_PATH: &str = "data/junk.json";
 
+/// How long a reported message waits before it is deleted for good. Same as the trash,
+/// and for the same reason: a folder nobody empties is a folder that fills up, and the
+/// filter would go on learning from months-old mail if it were kept forever.
+pub const RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Item {
     pub uid: u128,
@@ -114,6 +119,44 @@ pub fn list(username: &str) -> Vec<Item> {
     list_at(&path(), username)
 }
 
+pub fn due_at(path: &Path, stamp: u64) -> Vec<(String, Item)> {
+    let store = read_at(path);
+    let mut due = Vec::new();
+    for (owner, items) in store.users {
+        for item in items.values() {
+            if stamp.saturating_sub(item.junked_at) >= RETENTION_SECONDS {
+                due.push((owner.clone(), item.clone()));
+            }
+        }
+    }
+    due
+}
+
+/// Delete junk that has aged out, through the same purge the trash uses: blob first, then
+/// the signed deletion log. A message that merely sat in Junk is not "deleted" until this
+/// runs, and the log entry only happens when it does.
+pub fn sweep(
+    user_storage: &crate::core::UserStorage,
+    email_storage: &crate::core::EmailStorage,
+) {
+    for (owner, item) in due_at(&path(), now()) {
+        if !email_storage.emailExists(item.uid) {
+            // Already gone (deleted from the reader, or purged with the trash): forget it.
+            let _ = remove(&owner, item.uid);
+            continue;
+        }
+        if crate::core::trash::purge(user_storage, email_storage, &owner, item.uid) {
+            log::info!(
+                "[Junk] Deleted uid={} for '{}' after {} days in Junk",
+                item.uid,
+                owner,
+                RETENTION_SECONDS / 86_400
+            );
+            let _ = remove(&owner, item.uid);
+        }
+    }
+}
+
 pub fn junked_uids(username: &str) -> HashSet<u128> {
     list(username).into_iter().map(|item| item.uid).collect()
 }
@@ -149,6 +192,18 @@ mod tests {
         assert!(list_at(&path, "alice").is_empty());
         // Removing something that was never there is not an error, and must not write.
         assert!(!remove_at(&path, "alice", 99).unwrap());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn only_junk_past_retention_is_due() {
+        let path = tmp("due");
+        let now = 1_000_000_000u64;
+        add_at(&path, "alice", 1, now - RETENTION_SECONDS - 1).unwrap(); // aged out
+        add_at(&path, "alice", 2, now - 60).unwrap(); // fresh
+        let due = due_at(&path, now);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].1.uid, 1);
         let _ = fs::remove_file(&path);
     }
 
