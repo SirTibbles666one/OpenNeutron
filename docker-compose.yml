@@ -19,6 +19,9 @@ services:
     environment:
       RUST_LOG: info
       RSPAMD_CONTROLLER: "172.17.0.1:11334"
+      # preferred = a touch is enough; required = the key must ask for PIN/biometric.
+      # Change to required only after confirming the enrolled keys have a PIN set.
+      SLOTH_WEBAUTHN_UV: "preferred"
       RSPAMD_CONTROLLER_PASSWORD: "YJ2Dd7sRYX8HY9g4M3QecsdKElrGMC"
     tty: true
     stdin_open: true

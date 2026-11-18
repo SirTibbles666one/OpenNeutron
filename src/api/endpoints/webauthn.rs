@@ -139,6 +139,21 @@ pub fn list(request: &mut Request, user: Option<User>, _u: Arc<UserStorage>, _e:
     }))
 }
 
+
+/// How hard the key must prove a person is present.
+///
+/// "preferred" lets a bare touch satisfy a sign-in; "required" demands the key's PIN or
+/// biometric. Required is stronger and is what a key guarding an admin panel deserves — but
+/// a key with no PIN cannot answer it, so this is a switch the owner throws after checking
+/// their own key, not a default changed underneath a working setup.
+fn user_verification() -> &'static str {
+    match std::env::var("SLOTH_WEBAUTHN_UV").ok().as_deref() {
+        Some("required") => "required",
+        Some("discouraged") => "discouraged",
+        _ => "preferred",
+    }
+}
+
 /// POST /user/webauthn/register/begin — hand the browser creation options.
 pub fn register_begin(
     request: &mut Request,
@@ -184,7 +199,7 @@ pub fn register_begin(
             "authenticatorSelection": {
                 "residentKey": "discouraged",
                 "requireResidentKey": false,
-                "userVerification": "preferred"
+                "userVerification": user_verification()
             },
             "excludeCredentials": exclude,
         }
@@ -315,7 +330,7 @@ pub fn login_begin(
             "challenge": challenge,
             "rpId": RP_ID,
             "timeout": 120000,
-            "userVerification": "preferred",
+            "userVerification": user_verification(),
             "allowCredentials": allow,
         }
     }))
