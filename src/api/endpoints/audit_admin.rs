@@ -46,7 +46,9 @@ pub fn list(
     };
     // Defence in depth: the router already enforces Admin for this path, and this makes the
     // handler safe even if someone registers it under the wrong guard later.
-    if !caller.is_admin {
+    // Staff may read these: moderation needs the log and the health card. The router already
+    // enforces the route; this keeps the handler correct if it is ever registered elsewhere.
+    if !crate::core::roles::role(&caller.username, caller.is_admin).can_moderate() {
         return out(403, serde_json::to_vec(&json!({ "error": "Administrators only", "code": "forbidden" })).unwrap_or_default());
     }
 

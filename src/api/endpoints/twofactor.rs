@@ -227,6 +227,7 @@ pub fn login_with_code(
         token,
         force_reset: user.needs_force_reset(),
         is_admin: user.is_admin,
+        role: crate::core::roles::role(&user.username, user.is_admin).as_str().to_string(),
         username: user.username.clone(),
         public_key,
         unread_emails: unread,

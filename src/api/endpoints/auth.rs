@@ -75,6 +75,9 @@ pub fn login(
                 token: result.token,
                 force_reset: result.force_reset,
                 is_admin: result.is_admin,
+                role: crate::core::roles::role(&result.username, result.is_admin)
+                    .as_str()
+                    .to_string(),
                 username: result.username,
                 public_key: result.public_key,
                 unread_emails: result.unread_emails,

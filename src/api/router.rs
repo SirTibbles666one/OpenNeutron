@@ -31,6 +31,9 @@ pub enum RouteAuth {
     Authenticated,
     /// A valid session whose account currently has 'is_admin == true'.
     Admin,
+    /// A valid session whose account may moderate: staff, or an administrator. Staff can
+    /// suspend and approve signups and read the audit log; it cannot delete, re-key or grant.
+    Staff,
 }
 
 fn error_response(status: u16, code: &str, message: &str) -> Response<Cursor<Vec<u8>>> {
@@ -155,7 +158,7 @@ impl Router {
         if let Some((auth, handler)) = self.routes.get(&(method.clone(), path.clone())) {
             let caller = match auth {
                 RouteAuth::Open => None,
-                RouteAuth::Authenticated | RouteAuth::Admin => {
+                RouteAuth::Authenticated | RouteAuth::Admin | RouteAuth::Staff => {
                     let user = self.authenticate(&request);
                     match user {
                         None => {
@@ -164,13 +167,27 @@ impl Router {
                             return;
                         }
                         Some(u) => {
-                            if *auth == RouteAuth::Admin && !u.is_admin {
+                            let role = crate::core::roles::role(&u.username, u.is_admin);
+                            let refused = match auth {
+                                RouteAuth::Admin => !role.is_admin(),
+                                RouteAuth::Staff => !role.can_moderate(),
+                                _ => false,
+                            };
+                            if refused {
                                 log::warn!(
-                                    "[API] Denied admin route {} {} to non-admin user '{}'",
-                                    method, path, u.username
+                                    "[API] Denied {} route {} {} to '{}' (role {})",
+                                    if *auth == RouteAuth::Admin { "admin" } else { "staff" },
+                                    method,
+                                    path,
+                                    u.username,
+                                    role.as_str()
                                 );
-                                let response =
-                                    error_response(403, "forbidden", "Administrator privileges required");
+                                let need = if *auth == RouteAuth::Admin {
+                                    "Administrator privileges required"
+                                } else {
+                                    "Moderator privileges required"
+                                };
+                                let response = error_response(403, "forbidden", need);
                                 let _ = request.respond(add_cors_headers(response, origin_ref));
                                 return;
                             }

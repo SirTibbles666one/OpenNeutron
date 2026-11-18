@@ -188,6 +188,33 @@
       "detail": "",
       "prev": "1f41c4a8b1df2c2497874a647d2a471d9730153f000fe5bf025b3d4a71b35785",
       "hash": "5ac358608eb8ebf8743b012d16b1c969efecc4404e67ef8c5582263af5cf93b6"
+    },
+    {
+      "at": 1795017884,
+      "actor": "tibs",
+      "action": "user.role.staff",
+      "target": "qa",
+      "detail": "",
+      "prev": "5ac358608eb8ebf8743b012d16b1c969efecc4404e67ef8c5582263af5cf93b6",
+      "hash": "718fff5e068dc00a5b5e5a16a43a602d07dd680ea04d2eb9e182772ade2881f7"
+    },
+    {
+      "at": 1795018046,
+      "actor": "qa",
+      "action": "audit.read",
+      "target": "",
+      "detail": "",
+      "prev": "718fff5e068dc00a5b5e5a16a43a602d07dd680ea04d2eb9e182772ade2881f7",
+      "hash": "53476280a26789fb05eb4cd9e1994d58504f29d81cb1a9a462939dac0d67b615"
+    },
+    {
+      "at": 1795018051,
+      "actor": "tibs",
+      "action": "user.role.revoke",
+      "target": "qa",
+      "detail": "",
+      "prev": "53476280a26789fb05eb4cd9e1994d58504f29d81cb1a9a462939dac0d67b615",
+      "hash": "0f4f0415240400147ec7b779c66f40980d5e89e797cd8c311444c45dbb62fbcb"
     }
   ]
 }

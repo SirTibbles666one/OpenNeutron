@@ -27,6 +27,18 @@ fn error(status: u16, code: &str, message: &str) -> Response<Cursor<Vec<u8>>> {
 /// The router already gates every '/api/admin/*' route on 'RouteAuth::Admin';
 /// this second check means a route accidentally registered with the wrong auth
 /// level still cannot be used to administer the server.
+/// Moderation: suspend, approve, deny. Staff or admin.
+fn require_staff(user: Option<User>) -> Result<User, Response<Cursor<Vec<u8>>>> {
+    match user {
+        Some(u) if crate::core::roles::role(&u.username, u.is_admin).can_moderate() => Ok(u),
+        Some(u) => {
+            log::warn!("[Admin] '{}' attempted a moderation action without the right", u.username);
+            Err(error(403, "forbidden", "Moderator privileges required"))
+        }
+        None => Err(error(401, "unauthorized", "Unauthorized")),
+    }
+}
+
 fn require_admin(user: Option<User>) -> Result<User, Response<Cursor<Vec<u8>>>> {
     match user {
         Some(u) if u.is_admin => Ok(u),
@@ -180,9 +192,13 @@ pub fn list_users(
     let dtos: Vec<UserDto> = all_users
         .iter()
         .map(|u| {
-            UserDto::new(u, &user_storage.domain)
-                .with_pending(queued.contains(&u.username))
-                .with_suspended(switched_off.contains(&u.username))
+            {
+                let mut dto = UserDto::new(u, &user_storage.domain)
+                    .with_pending(queued.contains(&u.username))
+                    .with_suspended(switched_off.contains(&u.username));
+                dto.role = crate::core::roles::role(&u.username, u.is_admin).as_str().to_string();
+                dto
+            }
         })
         .collect();
     let total = dtos.len();
@@ -646,7 +662,7 @@ pub fn approve_pending(
     user_storage: Arc<UserStorage>,
     _email_storage: Arc<EmailStorage>,
 ) -> Response<Cursor<Vec<u8>>> {
-    let caller = match require_admin(user) {
+    let caller = match require_staff(user) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -695,7 +711,7 @@ pub fn deny_pending(
     user_storage: Arc<UserStorage>,
     email_storage: Arc<EmailStorage>,
 ) -> Response<Cursor<Vec<u8>>> {
-    let caller = match require_admin(user) {
+    let caller = match require_staff(user) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -757,7 +773,7 @@ pub fn suspend(
     user_storage: Arc<UserStorage>,
     _email_storage: Arc<EmailStorage>,
 ) -> Response<Cursor<Vec<u8>>> {
-    let caller = match require_admin(user) {
+    let caller = match require_staff(user) {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -837,4 +853,56 @@ pub fn suspend(
             error(500, "store_failed", "Could not change that account")
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+pub struct SetRoleRequest {
+    pub username: String,
+    /// "staff" grants moderation; "user" takes it away. "admin" is not settable here — that
+    /// goes through the existing admin flag, which already has a last-admin guard.
+    pub role: String,
+}
+
+/// Grant or remove the staff role. Admin-only: staff cannot create staff.
+pub fn set_role(
+    request: &mut Request,
+    user: Option<User>,
+    user_storage: Arc<UserStorage>,
+    _email_storage: Arc<EmailStorage>,
+) -> Response<Cursor<Vec<u8>>> {
+    let caller = match require_admin(user) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let req: SetRoleRequest = match read_json_body(request) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let username = req.username.trim().to_lowercase();
+    let role = match req.role.trim().to_ascii_lowercase().as_str() {
+        "staff" => crate::core::roles::Role::Staff,
+        "user" | "" => crate::core::roles::Role::User,
+        other => {
+            return error(400, "bad_role", &format!("'{other}' is not a role you can set here"))
+        }
+    };
+    let target = match user_storage.get_user(&username) {
+        Some(u) => u,
+        None => return error(404, "user_not_found", "No such account"),
+    };
+    if let Err(e) = crate::core::roles::set(&username, role, target.is_admin) {
+        return error(409, "role_refused", &format!("{e}"));
+    }
+    let _ = crate::core::audit::append(
+        &caller.username,
+        if role == crate::core::roles::Role::Staff { "user.role.staff" } else { "user.role.revoke" },
+        &username,
+        "",
+    );
+    Response::from_data(
+        serde_json::to_vec(&json!({"username": username, "role": role.as_str()}))
+            .unwrap_or_default(),
+    )
+    .with_status_code(200)
+    .with_header(json_header())
 }

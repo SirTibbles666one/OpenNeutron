@@ -533,7 +533,7 @@ fn handle_smtp_connection(
 fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, api_port: u16) -> Result<()> {
     use tiny_http::Method;
     use api::endpoints;
-    use api::RouteAuth::{Open, Authenticated, Admin};
+    use api::RouteAuth::{Open, Authenticated, Admin, Staff};
 
     let server = Server::http(format!("0.0.0.0:{}", api_port)).unwrap();
     let mut router = Router::new(Arc::clone(&user_storage), Arc::clone(&email_storage));
@@ -598,8 +598,8 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Get,       "/api/user/sigkey",     Authenticated, endpoints::sigkey::get);
     router.add_route(Method::Post,      "/api/user/sigkey",     Authenticated, endpoints::sigkey::set);
     router.add_route(Method::Post,      "/api/spam/report",      Authenticated, endpoints::spam::report);
-    router.add_route(Method::Post,      "/api/admin/audit",      Admin, endpoints::audit_admin::list);
-    router.add_route(Method::Post,      "/api/admin/mail-health", Admin, endpoints::admin_health::health);
+    router.add_route(Method::Post,      "/api/admin/audit",      Staff, endpoints::audit_admin::list);
+    router.add_route(Method::Post,      "/api/admin/mail-health", Staff, endpoints::admin_health::health);
     // Work list for re-sealing mail stored before post-quantum protection.
     router.add_route(Method::Get,       "/api/pq/migration",      Authenticated, endpoints::pqkeys::migration);
     // Deletion log: what left the mailbox, in a chain the client can check.
@@ -635,13 +635,14 @@ fn run_server(user_storage: Arc<UserStorage>, email_storage: Arc<EmailStorage>, 
     router.add_route(Method::Post,      "/api/admin/users/recovery-address", Admin, endpoints::admin::set_recovery_address);
     router.add_route(Method::Post,      "/api/admin/users/send-recovery",   Admin, endpoints::admin::send_recovery);
     router.add_route(Method::Post,      "/api/admin/users/admin",       Admin, endpoints::admin::set_admin);
-            router.add_route(Method::Post,      "/api/admin/users/suspend", Authenticated, endpoints::admin::suspend);
+    router.add_route(Method::Post,      "/api/admin/users/role",        Admin, endpoints::admin::set_role);
+            router.add_route(Method::Post,      "/api/admin/users/suspend", Staff, endpoints::admin::suspend);
     router.add_route(Method::Get,       "/api/admin/disk-usage",        Admin, endpoints::admin::disk_usage);
 
     // Self-registration approval queue: accounts created without an invite code.
     router.add_route(Method::Get,       "/api/admin/pending",           Admin, endpoints::admin::list_pending);
-    router.add_route(Method::Post,      "/api/admin/pending/approve",   Admin, endpoints::admin::approve_pending);
-    router.add_route(Method::Post,      "/api/admin/pending/deny",      Admin, endpoints::admin::deny_pending);
+    router.add_route(Method::Post,      "/api/admin/pending/approve",   Staff, endpoints::admin::approve_pending);
+    router.add_route(Method::Post,      "/api/admin/pending/deny",      Staff, endpoints::admin::deny_pending);
 
     // Manual-approval waiting list for public signup.
     router.add_route(Method::Post, "/api/waitlist/request",        Open,  endpoints::waitlist::request_access);

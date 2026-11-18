@@ -44,6 +44,9 @@ pub struct LoginResponse {
     pub token: String,
     pub force_reset: bool,
     pub is_admin: bool,
+    /// Resolved role: "user", "staff" or "admin". `is_admin` stays for older clients.
+    #[serde(default)]
+    pub role: String,
     pub username: String,
     pub public_key: Option<String>,
     pub unread_emails: usize,
@@ -81,6 +84,9 @@ pub struct UserDto {
     pub last_login: u64,
     pub email_count: usize,
     pub is_admin: bool,
+    /// Resolved role: "user", "staff" or "admin". `is_admin` stays for older clients.
+    #[serde(default)]
+    pub role: String,
     /// True while the account is queued for approval and cannot sign in.
     pub pending: bool,
     /// True while an operator has switched the account off. The mailbox and
@@ -100,6 +106,9 @@ impl UserDto {
             last_login: u.lastLogin,
             email_count: u.emailIds.len(),
             is_admin: u.is_admin,
+            // Resolved through the store: a staff account must see its own role, otherwise
+            // the panel cannot tell it what it is allowed to do.
+            role: crate::core::roles::role(&u.username, u.is_admin).as_str().to_string(),
             pending: false,
             suspended: false,
             recovery_email: crate::core::recovery::store().get(&u.username).email,
